@@ -1,6 +1,24 @@
+# Залежності
 node_modules
+vendor/
+
+# Збірки фронта (dist-demo.zip — для клієнта, збирається з dist-demo)
 dist
+dist-demo
+*.zip
+
+# Локальні змінні оточення. frontend/.env* без .local — спільні, без секретів, комітяться.
+# Секрети бекенда (пароль БД, адміна) — лише в backend/.env, він у гіт не потрапляє.
 .env.local
 .env.*.local
-.idea/workspace.xml
-dist-demo
+backend/.env
+
+# IDE і системні файли — у кожного розробника свої
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Кеші й логи
+.vite
+*.log
