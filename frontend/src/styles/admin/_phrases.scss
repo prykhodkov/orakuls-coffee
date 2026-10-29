@@ -1,0 +1,179 @@
+@use '../abstracts/variables' as *;
+@use 'tokens' as *;
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.toolbar__filters {
+  display: flex;
+  flex: 1 1 560px;
+  flex-wrap: wrap;
+  gap: 12px;
+
+  .field {
+    flex: 0 1 220px;
+  }
+
+  .field--grow {
+    flex: 1 1 220px;
+  }
+}
+
+.toolbar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.list-meta {
+  margin: 16px 0 8px;
+  color: $text-muted;
+  font-size: 14px;
+}
+
+.list {
+  transition: opacity 0.15s;
+
+  &.is-loading {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+}
+
+.empty {
+  padding: 48px 16px;
+  color: $text-muted;
+  text-align: center;
+}
+
+// ---- Таблиця фраз ----
+
+.phrases {
+  width: 100%;
+  border-collapse: collapse;
+
+  th,
+  td {
+    padding: 10px 8px;
+    border-bottom: 1px solid $border;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  th {
+    color: $text-muted;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  tbody tr:hover {
+    background: #fcf8f1;
+  }
+
+  tr.is-inactive .phrases__text {
+    opacity: 0.55;
+  }
+}
+
+.phrases__id {
+  width: 48px;
+  color: $text-muted;
+  font-variant-numeric: tabular-nums;
+}
+
+.phrases__category {
+  width: 160px;
+  white-space: nowrap;
+}
+
+.phrases__text {
+  min-width: 180px;
+  overflow-wrap: anywhere;
+}
+
+.phrases__status {
+  width: 110px;
+}
+
+.phrases__actions {
+  width: 1%;
+  white-space: nowrap;
+
+  &:is(td) {
+    text-align: right;
+  }
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 16px;
+  color: $text-muted;
+
+  &:empty {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .toolbar__filters .field,
+  .toolbar__actions,
+  .toolbar__actions .button {
+    flex: 1 1 100%;
+  }
+}
+
+// На вузьких екранах рядки таблиці стають картками
+@media (max-width: 900px) {
+  .phrases {
+    thead {
+      display: none;
+    }
+
+    tbody tr {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 6px 12px;
+      padding: 14px 4px;
+      border-bottom: 1px solid $border;
+    }
+
+    td {
+      padding: 0;
+      border: 0;
+    }
+
+    .phrases__id,
+    .phrases__category,
+    .phrases__status {
+      width: auto;
+    }
+
+    .phrases__text {
+      grid-column: 1 / -1;
+      min-width: 0;
+
+      &::before {
+        content: attr(data-label) ' · ';
+        color: $text-muted;
+        font-size: 12px;
+        font-weight: 600;
+      }
+    }
+
+    .phrases__actions {
+      grid-column: 1 / -1;
+      width: auto;
+      text-align: left;
+    }
+  }
+}

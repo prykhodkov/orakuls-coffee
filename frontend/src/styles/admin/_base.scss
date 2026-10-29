@@ -1,0 +1,46 @@
+@use '../abstracts/variables' as *;
+@use 'tokens' as *;
+
+body {
+  margin: 0;
+  background: $bg;
+  color: $text;
+  font-family: $font-ui;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+h1, h2, h3 {
+  font-family: $font-primary;
+  font-weight: 600;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.text-danger {
+  color: $danger;
+}
+
+.missing {
+  color: $text-muted;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.notice {
+  padding: 10px 14px;
+  border-radius: $radius;
+  background: #fff6e0;
+  color: #6b4b10;
+}

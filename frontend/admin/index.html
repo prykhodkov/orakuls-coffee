@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Orākuls Coffee — Админка</title>
+
+    <link rel="icon" type="image/png" href="/images/favicon.png">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=STIX+Two+Text:ital,wght@0,400..700;1,400..700&display=swap" rel="stylesheet">
+
+    <script type="module" src="/src/admin/main.js"></script>
+</head>
+
+<body>
+    <!-- Вхід -->
+    <div class="login" data-login hidden>
+        <form class="login__card" data-login-form novalidate>
+            <img class="login__logo" src="/images/logo.webp" width="866" height="566" alt="Orākuls Coffee">
+            <h1 class="login__title">Вход в админку</h1>
+
+            <label class="field">
+                <span class="field__label">Логин</span>
+                <input class="input" name="login" autocomplete="username" required>
+            </label>
+            <label class="field">
+                <span class="field__label">Пароль</span>
+                <input class="input" name="password" type="password" autocomplete="current-password" required>
+            </label>
+
+            <p class="form-error" data-login-error role="alert" hidden></p>
+            <button class="button button--primary button--wide" type="submit">Войти</button>
+        </form>
+    </div>
+
+    <!-- Робоча область -->
+    <div class="layout" data-app hidden>
+        <header class="topbar">
+            <div class="topbar__brand">
+                <img src="/images/eye.webp" width="849" height="342" alt="">
+                <span>Orākuls Coffee <small>Админка</small></span>
+            </div>
+            <button class="button button--ghost-light" type="button" data-logout>Выйти</button>
+        </header>
+
+        <main class="container">
+            <section class="stats" data-stats aria-label="Сводка"></section>
+
+            <section class="panel">
+                <div class="toolbar">
+                    <div class="toolbar__filters">
+                        <label class="field field--inline">
+                            <span class="field__label">Категория</span>
+                            <select class="input" data-filter="category">
+                                <option value="">Все категории</option>
+                            </select>
+                        </label>
+                        <label class="field field--inline">
+                            <span class="field__label">Перевод</span>
+                            <select class="input" data-filter="missing">
+                                <option value="">Все фразы</option>
+                                <option value="lv">Нет перевода LV</option>
+                                <option value="en">Нет перевода EN</option>
+                                <option value="ru">Нет перевода RU</option>
+                            </select>
+                        </label>
+                        <label class="field field--inline field--grow">
+                            <span class="field__label">Поиск</span>
+                            <input class="input" type="search" placeholder="Текст на любом языке" data-filter="search">
+                        </label>
+                    </div>
+                    <div class="toolbar__actions">
+                        <button class="button button--secondary" type="button" data-open-import>Импорт CSV / Excel</button>
+                        <button class="button button--primary" type="button" data-create>+ Добавить фразу</button>
+                    </div>
+                </div>
+
+                <p class="list-meta" data-list-meta></p>
+                <div class="list" data-list></div>
+                <nav class="pagination" data-pagination aria-label="Страницы"></nav>
+            </section>
+        </main>
+    </div>
+
+    <!-- Форма фрази -->
+    <dialog class="dialog" data-phrase-dialog>
+        <form class="dialog__body" data-phrase-form novalidate>
+            <h2 class="dialog__title" data-phrase-title></h2>
+
+            <label class="field">
+                <span class="field__label">Категория</span>
+                <select class="input" name="category" data-category-select>
+                    <option value="">— выберите —</option>
+                </select>
+                <span class="field__error" data-error-for="category"></span>
+            </label>
+
+            <div data-text-fields></div>
+            <p class="form-error" data-error-for="text"></p>
+
+            <label class="checkbox">
+                <input type="checkbox" name="isActive">
+                <span>Показывать пользователям</span>
+            </label>
+
+            <p class="form-error" data-phrase-error role="alert" hidden></p>
+
+            <div class="dialog__actions">
+                <button class="button button--secondary" type="button" data-close>Отмена</button>
+                <button class="button button--primary" type="submit">Сохранить</button>
+            </div>
+        </form>
+    </dialog>
+
+    <!-- Імпорт -->
+    <dialog class="dialog dialog--wide" data-import-dialog>
+        <div class="dialog__body">
+            <h2 class="dialog__title">Импорт фраз из CSV / Excel</h2>
+
+            <!-- Крок 1: вибір файлу -->
+            <div data-import-step="file">
+                <p>Первая строка файла — заголовки столбцов, дальше одна фраза на строку:</p>
+                <table class="sample-table">
+                    <thead><tr><th>category</th><th>lv</th><th>en</th><th>ru</th></tr></thead>
+                    <tbody>
+                        <tr><td>Любовь</td><td>Kāds šobrīd domā par tevi…</td><td>Someone is thinking of you…</td><td>Кто-то прямо сейчас думает о тебе…</td></tr>
+                    </tbody>
+                </table>
+                <ul class="hint-list">
+                    <li>Категория — названием (<i>Любовь, Деньги, Удача, Работа, Путешествия, День / Настроение</i>) или кодом (<i>love, money, luck, work, travel, mood</i>).</li>
+                    <li>Если перевода пока нет — оставьте ячейку пустой.</li>
+                    <li>Excel (.xlsx, .xls) или CSV в кодировке UTF-8. Берётся первый лист файла.</li>
+                    <li>Фразы <b>добавляются</b> к существующим. Повторный импорт того же файла создаст дубликаты.</li>
+                </ul>
+                <label class="dropzone" data-dropzone>
+                    <input type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" data-import-file>
+                    <span>Выберите файл или перетащите его сюда</span>
+                </label>
+                <p class="form-error" data-import-error role="alert" hidden></p>
+            </div>
+
+            <!-- Крок 2: перегляд -->
+            <div data-import-step="preview" hidden>
+                <p class="import-summary" data-import-summary></p>
+                <div data-import-preview></div>
+            </div>
+
+            <!-- Крок 3: результат -->
+            <div data-import-step="result" hidden>
+                <p class="import-summary" data-import-result></p>
+                <div data-import-result-errors></div>
+            </div>
+
+            <div class="dialog__actions">
+                <button class="button button--secondary" type="button" data-import-back hidden>Выбрать другой файл</button>
+                <button class="button button--secondary" type="button" data-close>Закрыть</button>
+                <button class="button button--primary" type="button" data-import-submit hidden></button>
+            </div>
+        </div>
+    </dialog>
+
+    <!-- Підтвердження -->
+    <dialog class="dialog dialog--narrow" data-confirm-dialog>
+        <form class="dialog__body" method="dialog">
+            <h2 class="dialog__title" data-confirm-title></h2>
+            <p data-confirm-text></p>
+            <div class="dialog__actions">
+                <button class="button button--secondary" value="cancel">Отмена</button>
+                <button class="button button--danger" value="ok" data-confirm-ok></button>
+            </div>
+        </form>
+    </dialog>
+
+    <div class="toasts" data-toasts></div>
+</body>
+</html>

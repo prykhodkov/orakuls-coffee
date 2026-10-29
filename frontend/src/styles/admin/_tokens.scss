@@ -1,0 +1,13 @@
+@use '../abstracts/variables' as *;
+
+// Світла тема адмінки на основі брендових кольорів
+$bg: #f6f0e4;
+$surface: #ffffff;
+$border: #e4d8c3;
+$text: $color-primary;
+$text-muted: #7a6a58;
+$accent: #9a6b1f;
+$danger: #b3261e;
+$success: #2e7d32;
+$radius: 10px;
+$font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;

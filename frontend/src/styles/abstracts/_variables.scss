@@ -1,0 +1,18 @@
+// Кольори з брендбука (стор. 10)
+$color-primary: #1e150d;
+$color-black: #000000;
+$color-cream: #ffe7be;
+
+// Золото з логотипа.
+// TODO: точні значення градієнтів запросити в дизайнера — зараз підібрані з логотипа на око
+$color-gold: #e8c27f;
+$color-gold-dark: #c08a2e;
+$color-amber: #e89a3c;
+$gradient-gold: linear-gradient(135deg, #f6dfae 0%, $color-gold-dark 50%, $color-gold 100%);
+
+// Шрифти з брендбука (стор. 11)
+// Minion Variable Concept — шрифт Adobe, потрібна ліцензія; поки fallback на STIX
+$font-primary: 'STIX Two Text', Georgia, serif;
+$font-secondary: 'Minion Variable Concept', 'STIX Two Text', Georgia, serif;
+
+$ease-out: cubic-bezier(0.22, 1, 0.36, 1);

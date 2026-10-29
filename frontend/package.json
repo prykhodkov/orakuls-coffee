@@ -1,0 +1,19 @@
+{
+  "name": "orakuls-coffee",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:demo": "node scripts/build-demo.js",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "sass": "^1.106.1",
+    "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

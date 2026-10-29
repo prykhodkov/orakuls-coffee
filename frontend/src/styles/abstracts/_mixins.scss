@@ -1,0 +1,8 @@
+@use 'variables' as *;
+
+@mixin gold-text {
+  background: $gradient-gold;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
