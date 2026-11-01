@@ -165,6 +165,21 @@ API_PROXY_TARGET=http://localhost:8000
 
 Рішення — [D-30, D-31](../backend/docs/decisions.md); правила й кількість запитів — [backend/docs/api-conventions.md](../backend/docs/api-conventions.md).
 
+## Статистика для головної адмінки (BE-008)
+
+Контракт — [API.md](API.md) → `GET /api/admin/stats`; потрібен `Authorization: Bearer <token>` (без нього `401`). Ендпоінт готовий.
+
+| Ендпоінт | Успіх | Статус |
+|----------|-------|--------|
+| `GET /api/admin/stats` | `200` + `{ total, active, byCategory, missing }` | готово |
+
+- **Відповідь:** `{ "total": 600, "active": 595, "byCategory": { "love": 100, "money": 100, "luck": 100, "work": 100, "travel": 100, "mood": 100 }, "missing": { "lv": 0, "en": 12, "ru": 3 } }`. Усі значення — числа; `byCategory` і `missing` завжди містять **усі** ключі (6 категорій і 3 мови, у цьому порядку), навіть із нулями, і на порожній базі теж — `byCategory[c] ?? 0` не обов'язковий, але безпечний.
+- **Числа збігаються зі списком:** `total` = `total` у `GET /api/admin/phrases` без фільтрів, `active` = при `?isActive=true`, `byCategory[c]` = при `?category=c`, `missing.xx` = при `?missing=xx`. Тому клік по плитці відкриває список із тією самою кількістю. `missing` рахує й приховані фрази; переклад із самих пробілів вважається порожнім.
+- Відповідь завжди свіжа (кешу немає, `Cache-Control: no-store`): після збереження, видалення чи імпорту можна одразу перезапитувати статистику. Параметрів ендпоінт не має — зайві query-параметри ігноруються; `POST`/`PUT`/`DELETE` на цей шлях → `404`.
+- Фраза з категорією поза списком (лише ручне редагування БД) входить у `total`, але не в `byCategory`.
+
+Рішення — [D-32](../backend/docs/decisions.md); опис відповіді — [backend/docs/api-conventions.md](../backend/docs/api-conventions.md).
+
 ## Службовий ендпоінт `GET /api/health`
 
 Поза контрактом [API.md](API.md), фронт його не використовує. Призначення — моніторинг і перевірка розгортання (зовнішній монітор на кшталт UptimeRobot; вбудованого health check на cPanel-хостингу GoDaddy немає).

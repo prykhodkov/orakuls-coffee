@@ -30,7 +30,7 @@ backend/
     bootstrap.php           автозавантаження, .env, UTC, обробники помилок
     routes.php              реєстрація маршрутів
     Http/                   Request, Response, Router, Kernel, ErrorHandler, AdminGuard
-    Controller/             обробники ендпоінтів (HealthController, MessageController, AuthController, PhraseController)
+    Controller/             обробники ендпоінтів (HealthController, MessageController, AuthController, PhraseController, StatsController)
     Auth/                   AuthConfig, TokenService, LoginRateLimiter (токен адміна й ліміт спроб)
     Repository/             SQL-запити до таблиць (PhraseRepository)
     Support/                Config, Db, Json, Logger, ApiException, Iso8601, IdList
@@ -65,10 +65,11 @@ backend/
 | `Controller\MessageController` | `GET /api/message`: перевіряє `lang`, розбирає `exclude`, повертає випадкове послання (BE-003) |
 | `Controller\AuthController` | `POST /api/admin/auth/login` (порядок: конфігурація → 400 → 422 → 429 → 401/200) і `GET /api/admin/auth/me`; токен не перевіряє — це робить guard (BE-004) |
 | `Controller\PhraseController` | `GET /api/admin/phrases` і `GET /api/admin/phrases/{id}` (BE-005): `parseFilter()` суворо розбирає параметри до звернення до БД (D-25), `index`/`show` викликають `PhraseRepository` і віддають `Phrase::toArray()` з `no-store`. `POST /api/admin/phrases` (`create`, `201`), `PUT /api/admin/phrases/{id}` (`update`, `200`), `DELETE /api/admin/phrases/{id}` (`delete`, `204`) (BE-006): порядок перевірок id → тіло → `PhraseValidator` → БД (D-29); формат `id` розбирає спільний `parseId()`. `POST /api/admin/phrases/import` (`import`, `200`, BE-007): тіло → `items` → валідація всіх елементів у пам'яті → один виклик `createMany()` (D-31) |
+| `Controller\StatsController` | `GET /api/admin/stats` (BE-008): без параметрів (зайві query ігноруються), викликає `PhraseRepository::stats()` і віддає `{ total, active, byCategory, missing }` з `no-store`; токен перевіряє guard, кешу немає (D-32) |
 | `Auth\AuthConfig` | Читає `ADMIN_LOGIN`, `ADMIN_PASSWORD_HASH`, `TOKEN_SECRET`, `TOKEN_TTL_HOURS`; некоректна конфігурація → лог (лише назва змінної) і `500` (fail-closed) |
 | `Auth\TokenService` | Випуск і сувора перевірка JWT HS256 без бібліотек (D-21); «поточний час» приходить параметром |
 | `Auth\LoginRateLimiter` | Ліміт невдалих спроб входу за IP на таблиці `login_attempts` (D-22) |
-| `Repository\PhraseRepository` | Єдине місце SQL до `phrases` (D-17): `findRandom()`, `search()` (сторінка + `COUNT(*)` з одним `WHERE`, D-26), `find()`, `create()`/`update()`/`delete()` (BE-006, D-29: 2/2/1 запит), `createMany()` (BE-007, D-31: одна транзакція, пакети по 100 рядків), `hasTextSql()`/`lacksTextSql()`, `escapeLike()` (D-24). Отримує `PDO` ззовні |
+| `Repository\PhraseRepository` | Єдине місце SQL до `phrases` (D-17): `findRandom()`, `search()` (сторінка + `COUNT(*)` з одним `WHERE`, D-26), `find()`, `create()`/`update()`/`delete()` (BE-006, D-29: 2/2/1 запит), `createMany()` (BE-007, D-31: одна транзакція, пакети по 100 рядків), `stats()` (BE-008, D-32: один запит з умовною агрегацією), `hasTextSql()`/`lacksTextSql()`, `escapeLike()` (D-24). Отримує `PDO` ззовні |
 | `Support\ApiException` | Очікувана помилка API (статус + код + повідомлення + `fields` + додаткові заголовки, напр. `Retry-After`) |
 | `Support\Config` | `.env` + змінні процесу |
 | `Support\Db` | Ліниве PDO-з'єднання з уніфікованими налаштуваннями сесії |
@@ -126,7 +127,6 @@ Apache / php -S
 
 | Компонент | Задача |
 |-----------|--------|
-| `StatsController` | BE-008 |
 | `.htaccess`, точка входу для хостингу | BE-009 |
 
 SQL до таблиць живе в `Repository\*`, а не в контролерах ([D-17](decisions.md)); нові запити до `phrases` додаються в `PhraseRepository`.
