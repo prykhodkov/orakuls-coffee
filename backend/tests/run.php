@@ -1381,25 +1381,33 @@ test('phraseValidator: category — немає / null → required; не з пе
     }
 });
 
-test('phraseValidator: text — немає → required; не об\'єкт → invalid; {} і [] — об\'єкт без ключів', function () {
+test('phraseValidator: text — немає → required; не об\'єкт → invalid; {} і [] — об\'єкт без ключів → empty', function () {
     assertSame(['text' => 'required'], pvFields(pvBodyWithout('text')));
     foreach (['abc', 5, null, true, false, ['a', 'b', 'c'], ['x']] as $bad) {
         assertSame(['text' => 'invalid'], pvFields(pvBody(['text' => $bad])), 'text=' . json_encode($bad));
     }
-    // json_decode('{}') і json_decode('[]') дають однаковий порожній масив
-    assertSame(
-        ['text.lv' => 'required', 'text.en' => 'required', 'text.ru' => 'required'],
-        pvFields(pvBody(['text' => []]))
-    );
+    // json_decode('{}') і json_decode('[]') дають однаковий порожній масив; усі три мови порожні (D-30)
+    assertSame(['text' => 'empty'], pvFields(pvBody(['text' => []])));
 });
 
-test('phraseValidator: text.xx — немає ключа → required; не рядок → invalid; невалідний UTF-8 → invalid', function () {
+test('phraseValidator: text.xx — немає ключа або null → порожній переклад; не рядок → invalid; невалідний UTF-8 → invalid', function () {
     foreach (Languages::CODES as $lang) {
         $text = ['lv' => 'a', 'en' => 'b', 'ru' => 'c'];
         unset($text[$lang]);
-        assertSame(["text.{$lang}" => 'required'], pvFields(pvBody(['text' => $text])), "без {$lang}");
+        $result = PhraseValidator::validate(pvBody(['text' => $text]));
+        assertSame([], $result['fields'], "без {$lang}");
+        assertSame('', $result['input']->text[$lang], "без {$lang}: порожній переклад");
 
-        foreach ([5, null, true, false, ['x'], [], 1.5] as $bad) {
+        $result = PhraseValidator::validate(pvText($lang, null));
+        assertSame([], $result['fields'], "{$lang}=null");
+        assertSame('', $result['input']->text[$lang], "{$lang}=null: порожній переклад");
+        foreach (Languages::CODES as $other) {
+            if ($other !== $lang) {
+                assertTrue($result['input']->text[$other] !== '', "{$other} не зачеплено");
+            }
+        }
+
+        foreach ([5, true, false, ['x'], [], 1.5] as $bad) {
             assertSame(["text.{$lang}" => 'invalid'], pvFields(pvText($lang, $bad)), "{$lang}=" . json_encode($bad));
         }
         assertSame(["text.{$lang}" => 'invalid'], pvFields(pvText($lang, "\xff")), "{$lang}: \\xff");
@@ -1434,8 +1442,22 @@ test('phraseValidator: text = empty, коли всі три порожні пі�
 
     // Помилка text.xx замінює empty
     assertSame(['text.lv' => 'invalid'], pvFields(pvBody(['text' => ['lv' => 5, 'en' => '', 'ru' => '']])));
-    assertSame(['text.ru' => 'required'], pvFields(pvBody(['text' => ['lv' => '', 'en' => '']])));
+    assertSame(['text' => 'empty'], pvFields(pvBody(['text' => ['lv' => '', 'en' => '']])));
     assertSame(['text.en' => 'invalid'], pvFields(pvBody(['text' => ['lv' => '', 'en' => "a\0", 'ru' => '']])));
+
+    // Відсутні й null — теж порожні (D-30)
+    assertSame(['text' => 'empty'], pvFields(pvBody(['text' => ['lv' => null, 'en' => null, 'ru' => null]])));
+    assertSame(['text' => 'empty'], pvFields(pvBody(['text' => ['lv' => null]])));
+    assertSame(['text' => 'empty'], pvFields(pvBody(['text' => ['en' => '']])));
+    assertSame(['text' => 'empty'], pvFields(pvBody(['text' => ['lv' => '  ']])));
+    assertSame(['text' => 'empty'], pvFields(pvBody(['text' => ['lv' => '', 'ru' => null]])));
+    // Помилка text.xx замінює empty і за відсутніх інших ключів
+    assertSame(['text.lv' => 'invalid'], pvFields(pvBody(['text' => ['lv' => 5]])));
+
+    // Єдина непорожня мова за відсутніх решти — успіх; відсутні мови зберігаються як ""
+    $only = PhraseValidator::validate(pvBody(['text' => ['en' => 'x']]));
+    assertSame([], $only['fields']);
+    assertSame(['lv' => '', 'en' => 'x', 'ru' => ''], $only['input']->text);
 
     // \u{200B} і \u{0085} не обрізаються (як і в JS) — це текст, а не порожнеча
     assertSame([], pvFields(pvBody(['text' => ['lv' => "\u{200B}", 'en' => '', 'ru' => '']])));
@@ -1487,7 +1509,7 @@ test('phraseValidator: кілька помилок збираються разо
     );
 
     assertSame(
-        ['category' => 'required', 'text.lv' => 'too_long', 'text.en' => 'required', 'text.ru' => 'invalid', 'isActive' => 'invalid'],
+        ['category' => 'required', 'text.lv' => 'too_long', 'text.ru' => 'invalid', 'isActive' => 'invalid'],
         pvFields(['text' => ['lv' => str_repeat('a', 501), 'ru' => "a\0"], 'isActive' => 1])
     );
 });

@@ -255,7 +255,7 @@ test('phrases-write: текст зберігається trimmed (юнікодн
     });
 });
 
-test('phrases-write: форма text — немає → required; не об\'єкт → invalid; {} → три required; ключ мови: немає → required, не рядок → invalid', function () {
+test('phrases-write: форма text — немає → required; не об\'єкт → invalid; {} → empty; ключ мови: немає або null → "" (201), не рядок → invalid', function () {
     withFreshSeed(function () {
         $without = validBody();
         unset($without['text']);
@@ -265,22 +265,17 @@ test('phrases-write: форма text — немає → required; не об\'є�
             assertFieldErrors(adminWrite('POST', '/api/admin/phrases', validBody(['text' => $bad])), ['text' => 'invalid'], 'text=' . json_encode($bad));
         }
 
-        $allRequired = ['text.lv' => 'required', 'text.en' => 'required', 'text.ru' => 'required'];
-        assertFieldErrors(adminWrite('POST', '/api/admin/phrases', validBody(['text' => (object) []])), $allRequired, 'text={}');
+        $empty = ['text' => 'empty'];
+        assertFieldErrors(adminWrite('POST', '/api/admin/phrases', validBody(['text' => (object) []])), $empty, 'text={}');
         assertFieldErrors(
             adminWrite('POST', '/api/admin/phrases', '{"category":"love","text":{}}'),
-            $allRequired,
+            $empty,
             'сирий {"text":{}}'
         );
-        assertFieldErrors(adminWrite('POST', '/api/admin/phrases', validBody(['text' => []])), $allRequired, 'text=[]');
+        assertFieldErrors(adminWrite('POST', '/api/admin/phrases', validBody(['text' => []])), $empty, 'text=[]');
 
-        assertFieldErrors(
-            adminWrite('POST', '/api/admin/phrases', validBody(['text' => ['lv' => 'a', 'ru' => 'c']])),
-            ['text.en' => 'required'],
-            'без en'
-        );
         foreach (['lv', 'en', 'ru'] as $lang) {
-            foreach ([5, null, true, [], ['x'], 1.5] as $bad) {
+            foreach ([5, true, [], ['x'], 1.5] as $bad) {
                 assertFieldErrors(
                     adminWrite('POST', '/api/admin/phrases', bodyWithText($lang, $bad)),
                     ["text.{$lang}" => 'invalid'],
@@ -288,7 +283,18 @@ test('phrases-write: форма text — немає → required; не об\'є�
                 );
             }
         }
-        assertSame(30, phraseCount(testPdo()));
+        assertSame(30, phraseCount(testPdo()), 'відхилені запити нічого не створили');
+
+        // М'яке правило мов (D-30): немає ключа або null — порожній переклад, не помилка
+        $data = createdPhrase(validBody(['text' => ['lv' => 'a', 'ru' => 'c']]));
+        assertSame(['lv' => 'a', 'en' => '', 'ru' => 'c'], $data['text'], 'без en: відповідь');
+        assertSame('', rowOf($data['id'])['text_en'], 'без en: БД');
+
+        foreach (['lv', 'en', 'ru'] as $lang) {
+            $data = createdPhrase(bodyWithText($lang, null));
+            assertSame('', $data['text'][$lang], "{$lang}=null: відповідь");
+            assertSame('', rowOf($data['id'])["text_{$lang}"], "{$lang}=null: БД");
+        }
     });
 });
 
@@ -447,6 +453,23 @@ test('phrases-write: PUT повністю замінює category/text/isActive,
         $rest = static fn (array $rows): array => array_values(array_filter($rows, static fn (array $r): bool => (int) $r['id'] !== 5));
         assertSame(29, count($rest($after)));
         assertSame($rest($before), $rest($after), 'решта 29 рядків без змін');
+    });
+});
+
+test('phrases-write: PUT з text без ключа en → 200, en = "" (повна заміна), createdAt без змін', function () {
+    withFreshSeed(function () {
+        $old = rowOf(5);
+        assertTrue($old['text_en'] !== '', 'сид: en фрази 5 непорожній');
+
+        $response = adminWrite('PUT', '/api/admin/phrases/5', validBody(['text' => ['lv' => 'Jauns', 'ru' => 'Новый']]));
+        $data = decode($response);
+
+        assertSame(200, $response->status, (string) $response->body);
+        assertSame(['lv' => 'Jauns', 'en' => '', 'ru' => 'Новый'], $data['text']);
+        assertSame(WRITE_SEED_CREATED_AT, $data['createdAt'], 'createdAt не змінився');
+        $row = rowOf(5);
+        assertSame('', $row['text_en'], 'БД: попередній en не зберігається');
+        assertSame($old['created_at'], $row['created_at'], 'created_at в БД');
     });
 });
 

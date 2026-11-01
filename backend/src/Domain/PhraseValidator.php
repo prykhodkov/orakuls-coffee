@@ -10,6 +10,10 @@ namespace App\Domain;
  *
  * Коди помилок (їх читає фронт): required, invalid, too_long, empty. Ключі — шлях до поля:
  * category, text, text.lv|en|ru, isActive. Невідомі ключі (верхній рівень і всередині text) ігноруються.
+ *
+ * `required` лише для category і text (відсутні). Тексти мов — `invalid` (не рядок, невалідний UTF-8, керівні
+ * символи) або `too_long`. М'яке правило мов (D-30): відсутній ключ мови і null — порожній переклад "", а не помилка;
+ * `empty` на рівні text — коли після trim порожні всі три мови (включно з відсутніми й null) і немає помилок text.xx.
  */
 final class PhraseValidator
 {
@@ -52,13 +56,13 @@ final class PhraseValidator
         } else {
             $textErrors = false;
             foreach (Languages::CODES as $lang) {
-                if (!array_key_exists($lang, $data['text'])) {
-                    $fields["text.{$lang}"] = 'required';
-                    $textErrors = true;
+                $raw = $data['text'][$lang] ?? null; // немає ключа і null — однаково: порожній переклад (D-30)
+                if ($raw === null) {
+                    $texts[$lang] = '';
                     continue;
                 }
 
-                $error = self::checkText($data['text'][$lang], $value);
+                $error = self::checkText($raw, $value);
                 if ($error !== null) {
                     $fields["text.{$lang}"] = $error;
                     $textErrors = true;
