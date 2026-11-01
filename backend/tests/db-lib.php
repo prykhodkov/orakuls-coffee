@@ -50,6 +50,30 @@ function reseed(): array
     return (new Seeder(testPdo(), APP_ROOT . '/database/seed/phrases.php'))->run();
 }
 
+/**
+ * reseed() до і після $fn: тест, що пише в БД, не залежить від сусідніх і нічого їм не лишає.
+ * НЕ викликати всередині withBigTable і навпаки (TRUNCATE комітить транзакцію).
+ */
+function withFreshSeed(callable $fn): void
+{
+    reseed();
+    try {
+        $fn();
+    } finally {
+        reseed();
+    }
+}
+
+/**
+ * Усі рядки phrases за id (сирі значення колонок) — для перевірок «БД не змінилась».
+ *
+ * @return list<array<string, mixed>>
+ */
+function tableDump(): array
+{
+    return testPdo()->query('SELECT * FROM `phrases` ORDER BY `id`')->fetchAll();
+}
+
 function phraseCount(PDO $pdo): int
 {
     return (int) $pdo->query('SELECT COUNT(*) FROM `phrases`')->fetchColumn();

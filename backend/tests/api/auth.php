@@ -188,7 +188,7 @@ test('auth: guard закритий — будь-який шлях під /api/ad
     }
 
     $token = authToken();
-    foreach ([['GET', '/api/admin/взагалі-щось'], ['GET', '/api/admin'], ['GET', '/api/admin/auth/login'], ['PUT', '/api/admin/phrases/1']] as [$method, $path]) {
+    foreach ([['GET', '/api/admin/взагалі-щось'], ['GET', '/api/admin'], ['GET', '/api/admin/auth/login'], ['PATCH', '/api/admin/phrases/1']] as [$method, $path]) {
         $response = authAs($token, $method, $path);
         assertSame(404, $response->status, "{$method} {$path} з токеном: " . $response->body);
         assertSame('not_found', decode($response)['error']['code']);
