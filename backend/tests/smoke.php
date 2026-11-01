@@ -134,6 +134,10 @@ check('DELETE /api/admin/phrases/1 без токена → 401', $unauthorized($
 $r = call('POST', "{$base}/api/admin/phrases/import", '');
 check('POST /api/admin/phrases/import без токена, з порожнім тілом → 401', $unauthorized($r), "status={$r['status']} body={$r['body']}");
 
+// Зведення (BE-008): без токена відхиляється guard'ом ще до звернення до БД
+$r = call('GET', "{$base}/api/admin/stats");
+check('GET /api/admin/stats без токена → 401, no-store', $unauthorized($r) && ($r['headers']['cache-control'] ?? '') === 'no-store', "status={$r['status']} body={$r['body']}");
+
 $r = call('GET', "{$base}/api/admin/nope");
 check('GET невідомого /api/admin/… без токена → 401, а не 404', $unauthorized($r), "status={$r['status']} body={$r['body']}");
 
