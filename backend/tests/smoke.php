@@ -130,6 +130,10 @@ check('PUT /api/admin/phrases/1 без токена → 401', $unauthorized($r),
 $r = call('DELETE', "{$base}/api/admin/phrases/1");
 check('DELETE /api/admin/phrases/1 без токена → 401', $unauthorized($r), "status={$r['status']} body={$r['body']}");
 
+// Імпорт фраз (BE-007): без токена відхиляється guard'ом ще до розбору тіла — на хостингу нічого не пишеться
+$r = call('POST', "{$base}/api/admin/phrases/import", '');
+check('POST /api/admin/phrases/import без токена, з порожнім тілом → 401', $unauthorized($r), "status={$r['status']} body={$r['body']}");
+
 $r = call('GET', "{$base}/api/admin/nope");
 check('GET невідомого /api/admin/… без токена → 401, а не 404', $unauthorized($r), "status={$r['status']} body={$r['body']}");
 
