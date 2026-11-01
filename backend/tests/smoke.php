@@ -114,6 +114,12 @@ check('GET /api/admin/auth/me без токена → 401 unauthorized, JSON', $
 $r = call('GET', "{$base}/api/admin/phrases");
 check('GET /api/admin/phrases без токена → 401', $unauthorized($r), "status={$r['status']} body={$r['body']}");
 
+$r = call('GET', "{$base}/api/admin/phrases/1");
+check('GET /api/admin/phrases/1 без токена → 401', $unauthorized($r), "status={$r['status']} body={$r['body']}");
+
+$r = call('GET', "{$base}/api/admin/phrases?perPage=0");
+check('GET /api/admin/phrases?perPage=0 без токена → 401 (guard раніше за валідацію)', $unauthorized($r), "status={$r['status']} body={$r['body']}");
+
 $r = call('GET', "{$base}/api/admin/nope");
 check('GET невідомого /api/admin/… без токена → 401, а не 404', $unauthorized($r), "status={$r['status']} body={$r['body']}");
 

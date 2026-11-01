@@ -7,6 +7,7 @@ declare(strict_types=1);
 
 use App\Auth\AuthConfig;
 use App\Auth\TokenService;
+use App\Controller\PhraseController;
 use App\Database\DatabaseGuard;
 use App\Database\Migrator;
 use App\Database\SchemaBuilder;
@@ -14,9 +15,12 @@ use App\Database\Seeder;
 use App\Database\SqlSplitter;
 use App\Domain\Categories;
 use App\Domain\Languages;
+use App\Domain\Phrase;
+use App\Domain\PhraseFilter;
 use App\Http\Request;
 use App\Http\Response;
 use App\Http\Router;
+use App\Repository\PhraseRepository;
 use App\Support\ApiException;
 use App\Support\Config;
 use App\Support\IdList;
@@ -1127,6 +1131,196 @@ test('hash-password: пароль в аргументах командного �
 
     assertSame(1, $result['code']);
     assertSame('', $result['stdout']);
+});
+
+// ---------- BE-005: Domain\Phrase, PhraseFilter ----------
+
+/** Типовий рядок таблиці phrases (як його повертає PDO з нативними prepared statements). */
+function phraseRow(array $override = []): array
+{
+    return $override + [
+        'id' => 42,
+        'category' => 'mood',
+        'text_lv' => 'Šodien veiksme būs tavā pusē.',
+        'text_en' => '',
+        'text_ru' => "Сегодня\nудача",
+        'is_active' => 1,
+        'created_at' => '2026-10-26 18:30:00',
+        'updated_at' => '2026-10-27 09:05:07',
+    ];
+}
+
+test('phrase: fromRow → toArray дає типізований об\'єкт API; порожній переклад — "", службових колонок немає', function () {
+    $phrase = Phrase::fromRow(phraseRow());
+
+    assertSame([
+        'id' => 42,
+        'category' => 'mood',
+        'text' => ['lv' => 'Šodien veiksme būs tavā pusē.', 'en' => '', 'ru' => "Сегодня\nудача"],
+        'isActive' => true,
+        'createdAt' => '2026-10-26T18:30:00Z',
+        'updatedAt' => '2026-10-27T09:05:07Z',
+    ], $phrase->toArray());
+});
+
+test('phrase: json_encode дає ключі в порядку з API.md, а isActive — true/false, а не 1/0', function () {
+    $json = Json::encode(Phrase::fromRow(phraseRow())->toArray());
+
+    assertSame(
+        '{"id":42,"category":"mood","text":{"lv":"Šodien veiksme būs tavā pusē.","en":"","ru":"Сегодня\nудача"},'
+        . '"isActive":true,"createdAt":"2026-10-26T18:30:00Z","updatedAt":"2026-10-27T09:05:07Z"}',
+        $json
+    );
+    assertTrue(str_contains(Json::encode(Phrase::fromRow(phraseRow(['is_active' => 0]))->toArray()), '"isActive":false'));
+});
+
+test('phrase: is_active і id приймаються і числами, і рядками; порядок ключів text не залежить від порядку колонок', function () {
+    assertSame(true, Phrase::fromRow(phraseRow(['is_active' => '1', 'id' => '7']))->isActive);
+    assertSame(false, Phrase::fromRow(phraseRow(['is_active' => '0']))->isActive);
+    assertSame(false, Phrase::fromRow(phraseRow(['is_active' => 0]))->isActive);
+    assertSame(7, Phrase::fromRow(phraseRow(['id' => '7']))->id);
+
+    // колонки в іншому порядку
+    $row = ['text_ru' => 'r', 'text_en' => 'e', 'text_lv' => 'l'] + phraseRow();
+    assertSame(['lv', 'en', 'ru'], array_keys(Phrase::fromRow($row)->text));
+});
+
+test('phrase: некоректна дата → виняток', function () {
+    assertThrows(fn () => Phrase::fromRow(phraseRow(['created_at' => 'вчора'])), InvalidArgumentException::class);
+    assertThrows(fn () => Phrase::fromRow(phraseRow(['updated_at' => '2026-02-31 00:00:00'])), InvalidArgumentException::class);
+});
+
+test('phraseFilter: значення за замовчуванням і offset() = (page − 1) × perPage', function () {
+    $default = new PhraseFilter();
+    assertSame([null, null, null, null, 1, 50], [$default->category, $default->search, $default->missing, $default->isActive, $default->page, $default->perPage]);
+    assertSame(0, $default->offset());
+    assertSame(20, (new PhraseFilter(page: 3, perPage: 10))->offset());
+    assertSame(99999999800, (new PhraseFilter(page: 999999999, perPage: 100))->offset(), 'межа: 9 цифр у page вміщується в int');
+});
+
+// ---------- BE-005: PhraseRepository::escapeLike, lacksTextSql ----------
+
+test('escapeLike: % і _ екрануються службовим символом x01; зворотний слеш та решта лишаються як є', function () {
+    assertSame("100\x01%", PhraseRepository::escapeLike('100%'));
+    assertSame("a\x01_b", PhraseRepository::escapeLike('a_b'));
+    assertSame("\x01%\x01_", PhraseRepository::escapeLike('%_'));
+    assertSame('\\', PhraseRepository::escapeLike('\\'));
+    assertSame('!|', PhraseRepository::escapeLike('!|'));
+    assertSame('Šodien', PhraseRepository::escapeLike('Šodien'));
+    assertSame('', PhraseRepository::escapeLike(''));
+});
+
+test('escapeLike: службовий символ x01 вилучається з вводу', function () {
+    assertSame('xy', PhraseRepository::escapeLike("x\x01y"));
+    assertSame('', PhraseRepository::escapeLike("\x01\x01"));
+    // x01 з вводу спершу вилучається, і лише потім % екранується власним x01: чужий x01 «екранувати» % не може
+    assertSame("a\x01%b", PhraseRepository::escapeLike("a\x01%b"));
+});
+
+test('lacksTextSql: TRIM(колонка) = \'\' для відомих мов; невідома мова → InvalidArgumentException', function () {
+    assertSame("TRIM(`text_en`) = ''", PhraseRepository::lacksTextSql('en'));
+    assertSame("TRIM(`text_lv`) = ''", PhraseRepository::lacksTextSql('lv'));
+    assertThrows(fn () => PhraseRepository::lacksTextSql('de'), InvalidArgumentException::class);
+    assertThrows(fn () => PhraseRepository::lacksTextSql('en`; DROP TABLE phrases; --'), InvalidArgumentException::class);
+});
+
+// ---------- BE-005: PhraseController::parseFilter ----------
+
+/** Розбір параметрів списку; ($query) → [category, search, missing, isActive, page, perPage]. */
+function parsedFilter(array $query): array
+{
+    $f = PhraseController::parseFilter(new Request('GET', '/api/admin/phrases', $query));
+
+    return [$f->category, $f->search, $f->missing, $f->isActive, $f->page, $f->perPage];
+}
+
+function assertParseRejected(array $query, string $note): void
+{
+    $e = assertThrows(fn () => PhraseController::parseFilter(new Request('GET', '/api/admin/phrases', $query)), ApiException::class);
+    assertSame(400, $e->status, $note);
+    assertSame('bad_request', $e->errorCode, $note);
+    assertSame([], $e->fields, $note);
+}
+
+test('parseFilter: без параметрів і з порожніми значеннями — усе null, page=1, perPage=50', function () {
+    $none = [null, null, null, null, 1, 50];
+
+    assertSame($none, parsedFilter([]));
+    assertSame($none, parsedFilter(['category' => '', 'search' => '', 'missing' => '', 'isActive' => '', 'page' => '', 'perPage' => '']));
+});
+
+test('parseFilter: category — лише точний код з Categories::CODES', function () {
+    assertSame('love', parsedFilter(['category' => 'love'])[0]);
+    foreach (Categories::CODES as $code) {
+        assertSame($code, parsedFilter(['category' => $code])[0]);
+    }
+    foreach (['LOVE', 'x', 'love ', ' love', "love\n"] as $bad) {
+        assertParseRejected(['category' => $bad], 'category=' . json_encode($bad));
+    }
+});
+
+test('parseFilter: missing — lv, en або ru; інше (de, EN) → 400', function () {
+    assertSame('en', parsedFilter(['missing' => 'en'])[2]);
+    foreach (['de', 'EN', 'en ', 'lv,en'] as $bad) {
+        assertParseRejected(['missing' => $bad], 'missing=' . $bad);
+    }
+});
+
+test('parseFilter: isActive — рівно true або false; 1, True, yes, TRUE → 400', function () {
+    assertSame(true, parsedFilter(['isActive' => 'true'])[3]);
+    assertSame(false, parsedFilter(['isActive' => 'false'])[3]);
+    foreach (['1', '0', 'True', 'yes', 'TRUE', 'False', ' true'] as $bad) {
+        assertParseRejected(['isActive' => $bad], 'isActive=' . $bad);
+    }
+});
+
+test('parseFilter: search обрізається trim; з одних пробілів — немає; ліміт 200 символів (не байтів)', function () {
+    assertSame('foo', parsedFilter(['search' => '  foo  '])[1]);
+    assertSame(null, parsedFilter(['search' => "  \n "])[1]);
+    assertSame(str_repeat('a', 200), parsedFilter(['search' => str_repeat('a', 200)])[1]);
+    assertParseRejected(['search' => str_repeat('a', 201)], '201 символ');
+    // кирилиця: 200 літер = 400 байтів, але 200 символів — це ще допустимо
+    assertSame(str_repeat('я', 200), parsedFilter(['search' => str_repeat('я', 200)])[1]);
+    assertParseRejected(['search' => str_repeat('я', 201)], '201 кирилична літера');
+    // пробіли по краях не рахуються в довжину: 200 символів + пробіли
+    assertSame(str_repeat('a', 200), parsedFilter(['search' => ' ' . str_repeat('a', 200) . ' '])[1]);
+});
+
+test('parseFilter: page — ціле від 1 до 999999999, канонічного вигляду', function () {
+    assertSame(1, parsedFilter(['page' => '1'])[4]);
+    assertSame(999999999, parsedFilter(['page' => '999999999'])[4]);
+    foreach (['0', '-1', '1.5', 'abc', '1000000000', '01', "1\n", ' 1', '1 ', '+1', '1e3'] as $bad) {
+        assertParseRejected(['page' => $bad], 'page=' . json_encode($bad));
+    }
+});
+
+test('parseFilter: perPage — ціле від 1 до 100, канонічного вигляду', function () {
+    assertSame(100, parsedFilter(['perPage' => '100'])[5]);
+    assertSame(1, parsedFilter(['perPage' => '1'])[5]);
+    assertSame(50, parsedFilter(['perPage' => '50'])[5]);
+    foreach (['0', '101', '1000', '-5', 'abc', '050', '1.5', "10\n"] as $bad) {
+        assertParseRejected(['perPage' => $bad], 'perPage=' . json_encode($bad));
+    }
+});
+
+test('parseFilter: параметр-масив → 400; повідомлення містять назву параметра, але не значення', function () {
+    foreach (['category', 'search', 'missing', 'isActive', 'page', 'perPage'] as $name) {
+        assertParseRejected([$name => ['love']], "{$name}[]");
+    }
+
+    $secret = 'zzz-reflected-value';
+    foreach (['category', 'missing', 'isActive', 'page', 'perPage'] as $name) {
+        $e = assertThrows(fn () => PhraseController::parseFilter(new Request('GET', '/x', [$name => $secret])), ApiException::class);
+        assertTrue(str_contains($e->getMessage(), $name), "повідомлення містить назву {$name}: " . $e->getMessage());
+        assertTrue(!str_contains($e->getMessage(), $secret), "повідомлення не віддзеркалює ввід ({$name})");
+    }
+});
+
+test('parseFilter: усі параметри разом', function () {
+    assertSame(
+        ['mood', 'šodien', 'en', true, 2, 10],
+        parsedFilter(['category' => 'mood', 'search' => ' šodien ', 'missing' => 'en', 'isActive' => 'true', 'page' => '2', 'perPage' => '10'])
+    );
 });
 
 // ---------- Запуск ----------
