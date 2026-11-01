@@ -5,6 +5,7 @@
 | Тип | Task |
 | Пріоритет | High |
 | Компонент | backend, database |
+| Статус | Done (2026-11-01) |
 | Залежить від | BE-001 |
 | Блокує | BE-003 … BE-008 |
 
@@ -54,17 +55,36 @@
 
 ## Acceptance criteria
 
-- [ ] Міграції застосовуються на чистій MySQL 5.7 без помилок і не використовують синтаксис 8.0.
-- [ ] Повторний запуск runner'а (`bin/migrate.php`) нічого не ламає (ідемпотентність) і не дублює дані; у таблиці `migrations` видно застосовані файли.
-- [ ] `schema.sql` дає ту саму схему, що й послідовність міграцій; його можна імпортувати через phpMyAdmin. `login_attempts` у `schema.sql` з'явиться разом із BE-004.
-- [ ] Таблиці й текстові колонки мають `utf8mb4` / `utf8mb4_unicode_ci`; фраза з латиськими діакритиками, кирилицею та емодзі зберігається й читається без спотворень.
-- [ ] Рядок завдовжки рівно 500 символів (у т.ч. з багатобайтовими) зберігається повністю; 501-й символ відхиляє валідація (BE-006), а не мовчки обрізає БД (strict mode).
-- [ ] `category` — `VARCHAR(16)`; список допустимих кодів існує в коді в одному місці, а в `docs/database.md` зазначено, що БД допустимість не гарантує (MySQL 5.7 ігнорує `CHECK`).
-- [ ] Є індекси за `category` та `is_active`; `EXPLAIN` вибірки з BE-003 не робить повного перебору по неіндексованих умовах, окрім `RAND()`.
-- [ ] Дати зберігаються в UTC; доступ з коду повертає їх у ISO 8601 (`…Z`).
-- [ ] `docker compose up` створює обидві бази: `orakuls` і `orakuls_test`; користувач `orakuls` має доступ до обох.
-- [ ] `tests/api.php` відтворює однакові дані на кожному прогоні (повторний запуск дає той самий результат) і не змінює дані в `orakuls`.
-- [ ] `bin/seed.php` та `tests/api.php` з БД, назва якої не закінчується на `_test`, завершуються з помилкою й нічого не змінюють (перевірено на `DB_NAME=orakuls`).
-- [ ] Сід містить випадки, потрібні задачам BE-003 … BE-008: активні й приховані фрази, порожні переклади різними мовами, всі шість категорій, діакритика, кирилиця, емодзі, `\n`.
-- [ ] Порядок розгортання схеми на хостингу (імпорт `schema.sql` через phpMyAdmin, без сіду) описано в `docs/BACKEND.md` і `backend/docs/deployment.md`.
-- [ ] Для вже створеного локального Docker-volume описано одноразовий крок (`docker compose down -v`), без якого `orakuls_test` не з'явиться (init-скрипти MySQL виконуються лише при створенні volume).
+- [x] Міграції застосовуються на чистій MySQL 5.7 без помилок і не використовують синтаксис 8.0.
+- [x] Повторний запуск runner'а (`bin/migrate.php`) нічого не ламає (ідемпотентність) і не дублює дані; у таблиці `migrations` видно застосовані файли.
+- [x] `schema.sql` дає ту саму схему, що й послідовність міграцій; його можна імпортувати через phpMyAdmin. `login_attempts` у `schema.sql` з'явиться разом із BE-004.
+- [x] Таблиці й текстові колонки мають `utf8mb4` / `utf8mb4_unicode_ci`; фраза з латиськими діакритиками, кирилицею та емодзі зберігається й читається без спотворень.
+- [x] Рядок завдовжки рівно 500 символів (у т.ч. з багатобайтовими) зберігається повністю; 501-й символ відхиляє валідація (BE-006), а не мовчки обрізає БД (strict mode).
+- [x] `category` — `VARCHAR(16)`; список допустимих кодів існує в коді в одному місці, а в `docs/database.md` зазначено, що БД допустимість не гарантує (MySQL 5.7 ігнорує `CHECK`).
+- [x] Є індекси за `category` та `is_active` (перевіряється через `information_schema.STATISTICS`). Аналіз `EXPLAIN` конкретних запитів виконують BE-003 і BE-005, коли ці запити з'являться.
+- [x] Дати зберігаються в UTC (`created_at`/`updated_at` без значень за замовчуванням, пишуться через `UTC_TIMESTAMP()`); `Support\Iso8601::fromDb()` перетворює їх на ISO 8601 (`…Z`).
+- [x] `docker compose up` створює обидві бази: `orakuls` і `orakuls_test`; користувач `orakuls` має доступ до обох.
+- [x] `tests/api.php` відтворює однакові дані на кожному прогоні (повторний запуск дає той самий результат) і не змінює дані в `orakuls`.
+- [x] `bin/seed.php` та `tests/api.php` з БД, назва якої не закінчується на `_test`, завершуються з помилкою й нічого не змінюють (перевірено на `DB_NAME=orakuls`).
+- [x] Сід містить випадки, потрібні задачам BE-003 … BE-008: активні й приховані фрази, порожні переклади різними мовами, всі шість категорій, діакритика, кирилиця, емодзі, `\n`.
+- [x] Порядок розгортання схеми на хостингу (імпорт `schema.sql` через phpMyAdmin, без сіду) описано в `docs/BACKEND.md` і `backend/docs/deployment.md`.
+- [x] Для вже створеного локального Docker-volume описано одноразовий крок (`docker compose down -v`), без якого `orakuls_test` не з'явиться (init-скрипти MySQL виконуються лише при створенні volume).
+
+## Як перевірити
+
+Усі команди — з папки `backend/`.
+
+```
+docker compose down -v && docker compose up -d --wait                          # перевіряє init-скрипт (ВИДАЛЯЄ дані локальної БД)
+docker compose exec -T db mysql -uorakuls -porakuls -e "SHOW DATABASES;"        # є orakuls і orakuls_test
+docker compose exec php php bin/migrate.php                                     # Applied: 001_create_phrases.sql
+docker compose exec php php bin/migrate.php                                     # Nothing to migrate.
+docker compose exec php php bin/build-schema.php --check                        # schema.sql is up to date.
+docker compose run --rm --no-deps php php tests/run.php                         # юніт-перевірки, 0 провалено
+docker compose exec php php tests/api.php                                       # схема, міграції, сід; запустити двічі
+docker compose exec php php bin/seed.php; echo "exit=$?"                        # відмова: БД 'orakuls' не *_test, exit=1
+docker compose exec -T db mysql -uorakuls -porakuls orakuls -e "SELECT COUNT(*) FROM phrases;"   # 0
+```
+
+Запобіжник `tests/api.php` фіксує БД сам (`orakuls_test`) і не залежить від `DB_NAME`, тому на `orakuls` його перевіряють підміною `TEST_DB_NAME` у тимчасовій копії скрипта: очікується відмова з кодом `1` і незмінені дані.
+

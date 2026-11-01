@@ -26,6 +26,7 @@ curl http://localhost:8000/api/health        # {"status":"ok"}
 | Запустити / зупинити | `docker compose up -d` / `docker compose down` |
 | Логи PHP (`error_log`) | `docker compose logs -f php` |
 | Юніт-перевірки | `docker compose run --rm --no-deps php php tests/run.php` |
+| Перевірки на тестовій БД | `docker compose exec php php tests/api.php` |
 | Smoke по HTTP | `docker compose exec php php tests/smoke.php` |
 | Shell у PHP-контейнері | `docker compose exec php bash` |
 | SQL-консоль | `docker compose exec db mysql -uorakuls -porakuls orakuls` |
@@ -33,16 +34,22 @@ curl http://localhost:8000/api/health        # {"status":"ok"}
 
 Код змонтовано в контейнер (`.:/app`), а `php -S` читає файли при кожному запиті — **перезапускати нічого не треба**. Перебудова образу (`--build`) потрібна лише при зміні `Dockerfile`.
 
-## Міграції та тестова БД (⏳ з BE-002)
-
-Після BE-002 з'являться команди:
+## Міграції, сід і тестова БД
 
 | Що | Команда |
 |----|---------|
 | Застосувати міграції до робочої БД | `docker compose exec php php bin/migrate.php` |
-| Перевірки ендпоінтів на тестовій БД | `docker compose exec php php tests/api.php` |
+| Показати застосовані й очікувані міграції (без змін) | `docker compose exec php php bin/migrate.php --status` |
+| Перегенерувати `database/schema.sql` з міграцій | `docker compose exec php php bin/build-schema.php` |
+| Перевірити, що `schema.sql` актуальний | `docker compose exec php php bin/build-schema.php --check` |
+| Залити сід у тестову БД вручну | `docker compose exec -e DB_NAME=orakuls_test php php bin/seed.php` (спершу `bin/migrate.php` з тим самим `-e`) |
+| Перевірки схеми й ендпоінтів на тестовій БД | `docker compose exec php php tests/api.php` |
 
-Тестова БД `orakuls_test` створюється разом з основною. **Одноразово**, коли оновите проєкт до BE-002: `docker compose down -v`, потім `up -d` — init-скрипти MySQL виконуються лише при створенні volume (робоча БД на той момент порожня, нічого не втрачається). Сід заливається тільки в `orakuls_test`; у робочу БД фрази завантажує адмін через імпорт. Докладніше — [database.md](database.md) і [testing.md](testing.md).
+Після `docker compose up` у робочій БД таблиць ще немає — один раз виконай `bin/migrate.php`. Робоча БД лишається без фраз: реальні фрази туди завантажує адмін через імпорт (BE-007). Сід заливається тільки в `*_test`; `bin/seed.php` на `orakuls` відмовиться.
+
+Нова міграція: файл `database/migrations/NNN_snake_case.sql` (правила — [database.md](database.md)), потім `bin/migrate.php` і `bin/build-schema.php`.
+
+Тестова БД `orakuls_test` створюється разом з основною init-скриптом `docker/mysql-init/`. **Одноразово**, якщо Docker-volume створено до BE-002: `docker compose down -v`, потім `docker compose up -d --wait` — init-скрипти MySQL виконуються лише при створенні volume. `down -v` видаляє всі дані локальної БД, тож спершу переконайся, що там немає потрібного (`docker compose exec -T db mysql -uorakuls -porakuls orakuls -e "SHOW TABLES;"`), а після — знову `bin/migrate.php`. Докладніше — [database.md](database.md) і [testing.md](testing.md).
 
 ## Порти
 

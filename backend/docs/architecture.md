@@ -31,8 +31,17 @@ backend/
     routes.php              реєстрація маршрутів
     Http/                   Request, Response, Router, Kernel, ErrorHandler
     Controller/             обробники ендпоінтів (зараз — HealthController)
-    Support/                Config, Db, Json, Logger, ApiException
-  tests/                    run.php (юніт-перевірки), smoke.php (по HTTP)
+    Support/                Config, Db, Json, Logger, ApiException, Iso8601
+    Domain/                 Categories, Languages — єдині списки кодів (без залежностей)
+    Database/               Migrator, SqlSplitter, SchemaBuilder, Seeder, DatabaseGuard
+  bin/                      CLI-скрипти: migrate.php, seed.php, build-schema.php
+  database/
+    migrations/             NNN_*.sql — міграції
+    schema.sql              повна схема для ручного імпорту (генерується)
+    seed/phrases.php        дані сіду (лише для тестової БД)
+  docker/mysql-init/        створення БД orakuls_test при першому запуску MySQL
+  tests/                    run.php (юніт-перевірки), api.php + api/*.php (тестова БД),
+                            smoke.php (по HTTP), lib.php, db-lib.php (спільні хелпери)
   Dockerfile, docker-compose.yml, .env.example
 ```
 
@@ -55,16 +64,27 @@ backend/
 | `Support\Db` | Ліниве PDO-з'єднання з уніфікованими налаштуваннями сесії |
 | `Support\Json` | Кодування JSON за правилами проєкту, `Json::object()` для порожніх об'єктів |
 | `Support\Logger` | Обгортка над `error_log()` |
+| `Support\Iso8601` | `DATETIME` з БД (UTC) → ISO 8601 з `Z` |
+| `Domain\Categories` | Єдиний список категорій і сувора перевірка коду |
+| `Domain\Languages` | Коди мов і білий список для імені колонки `text_*` |
+| `Database\Migrator` | Застосовує міграції по одному оператору, веде таблицю `migrations` |
+| `Database\SqlSplitter` | Розбиває SQL-файл на оператори (D-15) |
+| `Database\SchemaBuilder` | Збирає `schema.sql` з міграцій (D-16) |
+| `Database\Seeder` | Заливає сід у тестову БД |
+| `Database\DatabaseGuard` | Запобіжник: дозволяє руйнівні дії лише в БД `*_test` |
+| `bin/*.php` | CLI-обгортки над цими класами; через веб не виконуються |
 
 ### Правила залежностей
 
 ```
-Controller ──► Http, Support
+Controller ──► Http, Support, Domain
 Http       ──► Support
-Support    ──► (нічого з Http / Controller)
+Database   ──► Support, Domain, PDO
+Support    ──► (нічого з Http / Controller / Database)
+Domain     ──► (ні від чого)
 ```
 
-`Support` не знає про HTTP: його можна використовувати з будь-якого місця (у т. ч. зі скриптів міграцій, BE-002) без запуску веб-шару.
+`Support` не знає про HTTP: його можна використовувати з будь-якого місця (у т. ч. зі скриптів `bin/`) без запуску веб-шару. `Database` не залежить від `Http` і `Controller`, а `Domain` — звичайні константи й чисті функції без залежностей.
 
 ## Життєвий цикл запиту
 
@@ -86,7 +106,6 @@ Apache / php -S
 
 | Компонент | Задача |
 |-----------|--------|
-| Таблиця `phrases`, міграції, runner (`bin/migrate.php`), тестова БД `orakuls_test` зі сідом, `tests/api.php` | BE-002 |
 | `MessageController` (`GET /api/message`) | BE-003 |
 | Авторизація: `AuthController`, middleware для `/api/admin/*`, токен, таблиця `login_attempts` (власна міграція) | BE-004 |
 | Контролери фраз, валідація фрази | BE-005 … BE-007 |

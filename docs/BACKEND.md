@@ -41,11 +41,33 @@ backend/
     routes.php            — реєстрація маршрутів
     Http/                 — Request, Response, Router, Kernel, ErrorHandler
     Controller/           — обробники ендпоінтів
-    Support/              — Config, Db, Json, Logger, ApiException
+    Support/              — Config, Db, Json, Logger, ApiException, Iso8601
+    Domain/               — Categories, Languages (єдині списки кодів)
+    Database/             — Migrator, SqlSplitter, SchemaBuilder, Seeder, DatabaseGuard
+  bin/                    — CLI: migrate.php, seed.php, build-schema.php
+  database/               — migrations/*.sql, schema.sql (генерується), seed/phrases.php (лише тест)
+  docker/mysql-init/      — створення тестової БД orakuls_test
   tests/run.php           — юніт-перевірки (без БД)
+  tests/api.php           — перевірки схеми й ендпоінтів на тестовій БД orakuls_test (+ tests/api/*.php)
   tests/smoke.php         — перевірка запущеного API по HTTP
   Dockerfile, docker-compose.yml, .env.example
 ```
+
+## База даних
+
+MySQL 5.7, `utf8mb4` / `utf8mb4_unicode_ci`. Таблиця `phrases` (фраза з трьома мовами, `category` — `VARCHAR(16)` з перевіркою в коді, а не `ENUM`), службова `migrations`; `login_attempts` додасть BE-004. Дати — UTC. Схема живе в нумерованих міграціях `backend/database/migrations/`, а `backend/database/schema.sql` — повна схема для ручного імпорту, яка **генерується** з міграцій. Докладно — [backend/docs/database.md](../backend/docs/database.md).
+
+```
+docker compose exec php php bin/migrate.php                  # застосувати міграції до робочої БД (ідемпотентно)
+docker compose exec php php bin/build-schema.php             # перегенерувати schema.sql
+docker compose exec php php tests/api.php                    # перевірки на тестовій БД orakuls_test
+```
+
+Тестова БД `orakuls_test` створюється разом з основною; сід (відомі дані для тестів) заливається лише в неї, а `bin/seed.php` і `tests/api.php` відмовляються працювати з БД, назва якої не закінчується на `_test`. Робоча `orakuls` після міграцій порожня: реальні фрази завантажує адмін через імпорт. **Одноразово** для вже створеного Docker-volume: `docker compose down -v`, `docker compose up -d --wait`, потім `bin/migrate.php` (інакше `orakuls_test` не з'явиться — init-скрипти MySQL працюють лише при створенні volume).
+
+### Розгортання схеми на хостингу
+
+Без CLI: створити БД і користувача в cPanel (MySQL Databases) → phpMyAdmin → обрати порожню БД → Import → `backend/database/schema.sql`. Сід не імпортується. Подальші зміни схеми — нові `backend/database/migrations/NNN_*.sql`, що виконуються вручну. Покроково — [backend/docs/deployment.md](../backend/docs/deployment.md).
 
 ## Локальний запуск
 
@@ -56,6 +78,7 @@ cp .env.example .env                 # одноразово; .env у git не п
 docker compose up -d --build         # PHP 8.4 на :8000 + MySQL 5.7 на :3307 (хост-порт)
 docker compose exec php php tests/smoke.php        # перевірка по HTTP
 docker compose run --rm --no-deps php php tests/run.php   # юніт-перевірки
+docker compose exec php php bin/migrate.php        # одноразово: створити таблиці в робочій БД
 docker compose logs -f php           # логи
 docker compose down                  # зупинити (дані БД лишаються у volume; `down -v` — стерти)
 ```
