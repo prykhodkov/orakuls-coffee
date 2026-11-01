@@ -47,7 +47,7 @@ MySQL **5.7** (версія хостингу GoDaddy). Локально — `mys
 |---------|--------|----------|
 | `phrases` | BE-002 ✅ | Фраза з трьома мовами |
 | `migrations` | BE-002 ✅ | Службова: які міграції вже застосовано |
-| `login_attempts` | BE-004 ⏳ | Спроби входу для ліміту (`ip`, `attempted_at`); створюється власною міграцією BE-004, старі записи видаляються |
+| `login_attempts` | BE-004 ✅ | Невдалі спроби входу для ліміту (`ip`, `attempted_at`); міграція `002`, прострочені записи видаляються під час перевірки |
 
 ### `phrases`
 
@@ -62,6 +62,31 @@ MySQL **5.7** (версія хостингу GoDaddy). Локально — `mys
 Індекси: `idx_phrases_category`, `idx_phrases_is_active`. `EXPLAIN` запиту `GET /api/message` (BE-003): `type: ALL`, `Using where; Using temporary; Using filesort` — `ORDER BY RAND()` однаково проходить усіх кандидатів, індекс тут не допомагає; на ~600 фразах це ≈1 мс. Аналіз запитів BE-005 — у тій задачі.
 
 **Типи з БД.** Нативні prepared statements повертають `id` і `is_active` як `int` (не рядок і не `bool`), `DATETIME` — як рядок `'2026-10-26 18:30:00'`. У JSON `isActive` треба явно приводити `(bool)`, дату — через `Iso8601::fromDb()`; це робить серіалізатор фрази (BE-005). Регресію типів фіксує `tests/api/database.php`.
+
+### `login_attempts` (BE-004)
+
+| Поле | Тип | Примітка |
+|------|-----|----------|
+| `id` | `BIGINT UNSIGNED AUTO_INCREMENT` PK | |
+| `ip` | `VARCHAR(45) NOT NULL` | `REMOTE_ADDR` (найдовший IPv6 — 45 символів) або `unknown` |
+| `attempted_at` | `DATETIME NOT NULL`, **без** `DEFAULT` | UTC; код передає `UTC_TIMESTAMP()` |
+
+Індекс `idx_login_attempts_ip_time (ip, attempted_at)`. Рядок = одна **невдала** спроба входу з перевіркою пароля; успіхи, заблоковані запити та відмови `400`/`422` не записуються (D-22, D-23). Запити — у `Auth\LoginRateLimiter`:
+
+```sql
+-- очищення (перед кожною перевіркою ліміту)
+DELETE FROM login_attempts WHERE attempted_at < UTC_TIMESTAMP() - INTERVAL ? SECOND          -- 900
+
+-- перевірка ліміту й Retry-After: останні 5 спроб у вікні, вік у секундах
+SELECT TIMESTAMPDIFF(SECOND, attempted_at, UTC_TIMESTAMP()) AS age FROM login_attempts
+ WHERE ip = ? AND attempted_at > UTC_TIMESTAMP() - INTERVAL ? SECOND
+ ORDER BY attempted_at DESC LIMIT 5
+
+-- запис невдачі
+INSERT INTO login_attempts (ip, attempted_at) VALUES (?, UTC_TIMESTAMP())
+```
+
+Якщо у вибірці 5 рядків — IP заблоковано, а `Retry-After = 900 − age` п'ятого (найстарішого з п'яти): коли він вийде з вікна, у вікні лишиться менше 5 спроб. Параметр у `INTERVAL ? SECOND` працює з нативними prepared statements на MySQL 5.7. Вибірка «останніх п'яти» (а не `COUNT`) не дає зайвим записам одночасних запитів зсунути розрахунок. Таблиця не росте безмежно: старше за 15 хв видаляється при кожному вході.
 
 ### Міграції
 
@@ -79,7 +104,7 @@ MySQL **5.7** (версія хостингу GoDaddy). Локально — `mys
 
 ### `schema.sql`
 
-`database/schema.sql` — повна схема для ручного імпорту через phpMyAdmin (на shared-хостингу CLI може не бути). Файл **генерується** з міграцій (`php bin/build-schema.php`), вручну не редагується ([D-16](decisions.md)). Він містить DDL `migrations` і `INSERT IGNORE` застосованих імен, тож після імпорту runner не застосовує ці міграції вдруге. Даних (сіду) там немає. Дві перевірки охороняють файл: `schema.sql актуальний` (`tests/run.php`, також `php bin/build-schema.php --check`) і `паритет` (`tests/api/database.php`: імпорт `schema.sql` дає ту саму схему за `information_schema`, що й міграції). `login_attempts` з'явиться в `schema.sql` разом з BE-004.
+`database/schema.sql` — повна схема для ручного імпорту через phpMyAdmin (на shared-хостингу CLI може не бути). Файл **генерується** з міграцій (`php bin/build-schema.php`), вручну не редагується ([D-16](decisions.md)). Він містить DDL `migrations` і `INSERT IGNORE` застосованих імен, тож після імпорту runner не застосовує ці міграції вдруге. Даних (сіду) там немає. Дві перевірки охороняють файл: `schema.sql актуальний` (`tests/run.php`, також `php bin/build-schema.php --check`) і `паритет` (`tests/api/database.php`: імпорт `schema.sql` дає ту саму схему за `information_schema`, що й міграції). `login_attempts` (міграція `002`) у ньому є.
 
 ### Єдині списки в коді
 

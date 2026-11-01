@@ -22,12 +22,26 @@
 | `ApiException::unauthorized()` | 401 | `unauthorized` |
 | `ApiException::notFound()` | 404 | `not_found` |
 | `ApiException::validation(['text.lv' => 'too_long'])` | 422 | `validation_error` |
-| `ApiException::rateLimited()` | 429 | `rate_limited` |
+| `ApiException::rateLimited(?int $retryAfterSeconds = null)` | 429 | `rate_limited` |
 | `ApiException::server()` | 500 | `server_error` |
 
 ```php
 throw ApiException::validation(['category' => 'invalid']);
+throw ApiException::rateLimited(120);   // 429 + Retry-After: 120
 ```
+
+**Заголовки помилки.** Конструктор `ApiException` має необов'язковий останній параметр `$headers` (`array<string, string>`); `ErrorHandler` додає їх до відповіді. `Cache-Control: no-store` він ставить сам і **не дозволяє** заголовкам винятку його замінити — вони лише доповнюють. Зараз ним користується лише `rateLimited()`: `Retry-After` — ціле число секунд, мінімум `1` (`0` і від'ємні значення піднімаються до `1`); без аргументу заголовка немає.
+
+**Помилки автентифікації (BE-004).**
+
+| Ситуація | Відповідь |
+|----------|-----------|
+| Немає / неправильний / прострочений токен на `/api/admin/*` | `401 unauthorized`, `Unauthorized` — причина не розкривається |
+| Неправильний логін **або** пароль | `401 unauthorized`, `Invalid credentials` — однаково для обох |
+| Порожнє тіло / не-JSON логіну | `400 bad_request` |
+| Порожні, нерядкові поля або пароль > 1024 байт | `422 validation_error`, `fields`: `login: required`, `password: required \| too_long` |
+| 5 невдалих входів з IP за 15 хв | `429 rate_limited` + `Retry-After` (1…900 с) |
+| Некоректна конфігурація автентифікації | `500 server_error` на логіні **і** на будь-якому адмін-шляху (доступ не відкривається); у `error_log` один рядок `Auth config invalid: <ЗМІННА> …` без значень |
 
 Контролер просто кидає виняток; перетворення на відповідь робить `Kernel`. Ключі в `fields` — шлях до поля в тілі запиту (`category`, `text.lv`), значення — машинний код (`required`, `invalid`, `too_long`, `empty`).
 
@@ -58,4 +72,4 @@ throw ApiException::validation(['category' => 'invalid']);
 
 Що пишемо: несподівані винятки (500), фатальні помилки, deprecated, збій БД у `/api/health` (одним рядком, без trace). Звичайні 4xx — не логуються. Тому обсяг логу малий і росте лише при реальних проблемах.
 
-Не логувати: паролі, токени, `Authorization`, тіла запитів. Обґрунтування вибору — [decisions.md](decisions.md) (D-06).
+Не логувати: паролі, токени, хеші, `TOKEN_SECRET`, `Authorization`, тіла запитів (повідомлення про некоректну конфігурацію автентифікації містить лише назву змінної; невдалі входи — це 4xx, тож не логуються, а рахуються в `login_attempts`). Обґрунтування вибору — [decisions.md](decisions.md) (D-06).

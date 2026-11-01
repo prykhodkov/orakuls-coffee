@@ -39,13 +39,14 @@ backend/
   src/
     bootstrap.php         — автозавантаження, .env, логер, обробники помилок
     routes.php            — реєстрація маршрутів
-    Http/                 — Request, Response, Router, Kernel, ErrorHandler
+    Http/                 — Request, Response, Router, Kernel, ErrorHandler, AdminGuard
     Controller/           — обробники ендпоінтів
+    Auth/                 — AuthConfig, TokenService, LoginRateLimiter (токен адміна, ліміт спроб)
     Repository/           — SQL-запити до таблиць (PhraseRepository)
     Support/              — Config, Db, Json, Logger, ApiException, Iso8601, IdList
     Domain/               — Categories, Languages (єдині списки кодів)
     Database/             — Migrator, SqlSplitter, SchemaBuilder, Seeder, DatabaseGuard
-  bin/                    — CLI: migrate.php, seed.php, build-schema.php
+  bin/                    — CLI: migrate.php, seed.php, build-schema.php, hash-password.php
   database/               — migrations/*.sql, schema.sql (генерується), seed/phrases.php (лише тест)
   docker/mysql-init/      — створення тестової БД orakuls_test
   tests/run.php           — юніт-перевірки (без БД)
@@ -56,7 +57,7 @@ backend/
 
 ## База даних
 
-MySQL 5.7, `utf8mb4` / `utf8mb4_unicode_ci`. Таблиця `phrases` (фраза з трьома мовами, `category` — `VARCHAR(16)` з перевіркою в коді, а не `ENUM`), службова `migrations`; `login_attempts` додасть BE-004. Дати — UTC. Схема живе в нумерованих міграціях `backend/database/migrations/`, а `backend/database/schema.sql` — повна схема для ручного імпорту, яка **генерується** з міграцій. Докладно — [backend/docs/database.md](../backend/docs/database.md).
+MySQL 5.7, `utf8mb4` / `utf8mb4_unicode_ci`. Таблиця `phrases` (фраза з трьома мовами, `category` — `VARCHAR(16)` з перевіркою в коді, а не `ENUM`), службові `migrations` і `login_attempts` (невдалі спроби входу адміна для ліміту, BE-004). Дати — UTC. Схема живе в нумерованих міграціях `backend/database/migrations/`, а `backend/database/schema.sql` — повна схема для ручного імпорту, яка **генерується** з міграцій. Докладно — [backend/docs/database.md](../backend/docs/database.md).
 
 ```
 docker compose exec php php bin/migrate.php                  # застосувати міграції до робочої БД (ідемпотентно)
@@ -92,6 +93,29 @@ docker compose down                  # зупинити (дані БД лиша�
 VITE_API_MOCK=false
 API_PROXY_TARGET=http://localhost:8000
 ```
+
+## Автентифікація адміна (BE-004)
+
+Контракт — [API.md](API.md) → «Авторизація». Що має знати фронт:
+
+- **Вхід:** `POST /api/admin/auth/login` з `{ "login", "password" }` → `200 { "token", "expiresAt" }`. Токен передається заголовком `Authorization: Bearer <token>` (схема нечутлива до регістру). Формат токена фронт не розбирає.
+- **Перевірка сесії:** `GET /api/admin/auth/me` → `200 { "login": "admin" }`.
+- **Термін сесії — 7 діб** (`expiresAt` це відображає). Оновлення токена (refresh) і `logout` на бекенді немає: фронт просто видаляє токен локально. Зміна пароля або секрету на сервері анулює всі токени — тоді будь-який запит дасть `401`, і фронт повертає на форму входу.
+- **Коди:**
+
+  | Код | Коли |
+  |-----|------|
+  | `401 unauthorized` | неправильні логін/пароль (повідомлення однакове, не видно, що саме невірне); на будь-якому `/api/admin/*` — немає, неправильний чи прострочений токен |
+  | `422 validation_error` | порожні чи нерядкові `login`/`password`, пароль довший за 1024 байти (`fields`: `login`/`password` → `required`/`too_long`). Такі запити не рахуються як спроби входу |
+  | `400 bad_request` | порожнє тіло чи не-JSON |
+  | `429 rate_limited` | 5 невдалих спроб з одного IP за 15 хв; заголовок `Retry-After` — ціле число секунд (1…900). Блок знімається сам; правильний пароль під час блоку теж дає `429` |
+  | `500 server_error` | на сервері не налаштовано облікові дані (порожні `ADMIN_PASSWORD_HASH`/`TOKEN_SECRET` тощо) — на логіні й на будь-якому `/api/admin/*` |
+
+- **Захист закритий за замовчуванням:** будь-який шлях під `/api/admin/` без дійсного токена дає `401` (навіть неіснуючий), окрім `POST /api/admin/auth/login`. Усі відповіді логіну й `me` мають `Cache-Control: no-store`.
+- **Локальний вхід:** `ADMIN_LOGIN=admin`, а пароль кожен розробник задає у своєму `backend/.env` (`bin/hash-password.php`, процедура — [backend/docs/configuration.md](../backend/docs/configuration.md)). На машині розробника бекенда локальний пароль адмінки — `local-dev-password` (це лише приклад для локальної БД; на інших машинах і на проді пароль інший). Для прод-оточення — BE-009.
+- Ліміт рахується за IP з'єднання (`REMOTE_ADDR`); спільний IP (офіс, NAT) ділить ліміт. Не надсилайте в автотестах неправильний пароль частіше 4 разів поспіль.
+
+Рішення — [D-20 … D-23](../backend/docs/decisions.md), безпека — [backend/docs/security.md](../backend/docs/security.md).
 
 ## Службовий ендпоінт `GET /api/health`
 

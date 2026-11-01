@@ -28,6 +28,7 @@ curl http://localhost:8000/api/health        # {"status":"ok"}
 | Юніт-перевірки | `docker compose run --rm --no-deps php php tests/run.php` |
 | Перевірки на тестовій БД | `docker compose exec php php tests/api.php` |
 | Smoke по HTTP | `docker compose exec php php tests/smoke.php` |
+| Хеш пароля адміна для `.env` | `docker compose exec php php bin/hash-password.php` (пароль запитується, не аргумент) |
 | Shell у PHP-контейнері | `docker compose exec php bash` |
 | SQL-консоль | `docker compose exec db mysql -uorakuls -porakuls orakuls` |
 | Стерти БД повністю | `docker compose down -v` (видаляє volume `db_data`) |
@@ -50,6 +51,27 @@ curl http://localhost:8000/api/health        # {"status":"ok"}
 Нова міграція: файл `database/migrations/NNN_snake_case.sql` (правила — [database.md](database.md)), потім `bin/migrate.php` і `bin/build-schema.php`.
 
 Тестова БД `orakuls_test` створюється разом з основною init-скриптом `docker/mysql-init/`. **Одноразово**, якщо Docker-volume створено до BE-002: `docker compose down -v`, потім `docker compose up -d --wait` — init-скрипти MySQL виконуються лише при створенні volume. `down -v` видаляє всі дані локальної БД, тож спершу переконайся, що там немає потрібного (`docker compose exec -T db mysql -uorakuls -porakuls orakuls -e "SHOW TABLES;"`), а після — знову `bin/migrate.php`. Докладніше — [database.md](database.md) і [testing.md](testing.md).
+
+## Вхід адміна локально (BE-004)
+
+Адмінські ендпоінти (`/api/admin/*`) закриті токеном, а без налаштованих облікових даних відповідають `500` (fail-closed). Тому після `cp .env.example .env` один раз налаштуй свої локальні дані (повна процедура й причини — [configuration.md](configuration.md)):
+
+```
+printf '%s\n' 'мій-локальний-пароль' | docker compose exec -T php php bin/hash-password.php   # друкує ADMIN_PASSWORD_HASH='…'
+docker compose exec php php -r "echo bin2hex(random_bytes(32));"                               # значення для TOKEN_SECRET
+```
+
+Рядки `ADMIN_PASSWORD_HASH='…'` (одинарні лапки!) і `TOKEN_SECRET='…'` впиши в `backend/.env` редактором, а не через `echo`/`sed` (оболонка розкриє `$`); `ADMIN_LOGIN=admin`. На машині розробника бекенда локальний пароль — `local-dev-password`: це лише приклад для локальної БД, у `.env` кожного розробника свій, у git він не потрапляє. Для прод-оточення використовується процедура з BE-009.
+
+Отримати токен і викликати адмін-ендпоінт:
+
+```
+curl -s -X POST localhost:8000/api/admin/auth/login -H 'Content-Type: application/json' -d '{"login":"admin","password":"мій-локальний-пароль"}'
+# → {"token":"…","expiresAt":"…"}   (термін — 7 діб)
+curl -s localhost:8000/api/admin/auth/me -H "Authorization: Bearer <token>"       # {"login":"admin"}
+```
+
+Не надсилай неправильний пароль більше 4 разів поспіль: на 5-й невдачі IP блокується на 15 хвилин (`429`). Зняти блок локально: `docker compose exec db mysql -uorakuls -porakuls orakuls -e "DELETE FROM login_attempts"`. Усі запити з хоста приходять до контейнера з однієї адреси (шлюз Docker), тож ліміт спільний для всього, що ти запускаєш локально.
 
 ## Порти
 

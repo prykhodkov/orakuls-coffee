@@ -14,11 +14,11 @@
 |------|--------|
 | [architecture.md](architecture.md) | Загальна картина, структура коду, компоненти, правила залежностей, життєвий цикл запиту |
 | [development.md](development.md) | Локальний запуск у Docker, команди, порти, правила коду, типові проблеми |
-| [configuration.md](configuration.md) | `.env` і змінні оточення, секрети |
+| [configuration.md](configuration.md) | `.env` і змінні оточення, секрети, облікові дані адміна |
 | [api-conventions.md](api-conventions.md) | Як код реалізує контракт: типи в JSON, запит/відповідь, як додати ендпоінт |
 | [error-handling.md](error-handling.md) | Формат помилок, `ApiException`, що буде з несподіваними помилками, логування |
 | [database.md](database.md) | Підключення, налаштування сесії, правила запитів, обмеження MySQL 5.7 |
-| [security.md](security.md) | Що вже захищено і що заплановано (автентифікація, секрети, файли на хостингу) |
+| [security.md](security.md) | Що вже захищено і що заплановано (автентифікація адміна, секрети, файли на хостингу) |
 | [testing.md](testing.md) | Юніт-перевірки та smoke-тести, як додати нову перевірку |
 | [deployment.md](deployment.md) | Хостинг GoDaddy: версії, топологія, розкладка файлів, `.htaccess` |
 | [decisions.md](decisions.md) | Журнал архітектурних рішень: що вибрали, чому, що відкинули |
