@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Repository;
 
+use App\Domain\Categories;
 use App\Domain\Languages;
 use App\Domain\Phrase;
 use App\Domain\PhraseFilter;
@@ -278,6 +279,46 @@ final class PhraseRepository
         foreach ($binds as $i => [$value, $type]) {
             $stmt->bindValue($i + 1, $value, $type);
         }
+    }
+
+    /**
+     * Зведення для адмінки (BE-008) одним запитом з умовною агрегацією: знімок атомарний (кілька окремих запитів
+     * могли б побачити різний стан, якщо адмін щось змінив між ними), D-32. Порожній переклад — лише lacksTextSql(),
+     * тож missing.xx завжди збігається з total списку ?missing=xx; приховані фрази теж враховуються.
+     * Значення категорій у SQL — літерали з Categories::CODES (білий список), ввід користувача сюди не потрапляє.
+     * SUM() у MySQL дає DECIMAL (у PHP — рядок) і NULL на порожній таблиці: COALESCE + (int) на кожному значенні.
+     * Фраза з категорією поза списком (можлива лише при ручному редагуванні БД) не потрапляє в byCategory,
+     * але входить у total. Ключі byCategory і missing — рівно константи, у їхньому порядку.
+     *
+     * @return array{total: int, active: int, byCategory: array<string, int>, missing: array<string, int>}
+     */
+    public function stats(): array
+    {
+        $columns = ['COUNT(*) AS `total`', 'COALESCE(SUM(`is_active` = 1), 0) AS `active`'];
+        foreach (Categories::CODES as $code) {
+            $columns[] = "COALESCE(SUM(`category` = '{$code}'), 0) AS `cat_{$code}`"; // $code — з білого списку
+        }
+        foreach (Languages::CODES as $lang) {
+            $columns[] = 'COALESCE(SUM(' . self::lacksTextSql($lang) . '), 0) AS `miss_' . $lang . '`';
+        }
+
+        $row = $this->pdo->query('SELECT ' . implode(', ', $columns) . ' FROM `phrases`')->fetch();
+
+        $byCategory = [];
+        foreach (Categories::CODES as $code) {
+            $byCategory[$code] = (int) $row["cat_{$code}"];
+        }
+        $missing = [];
+        foreach (Languages::CODES as $lang) {
+            $missing[$lang] = (int) $row["miss_{$lang}"];
+        }
+
+        return [
+            'total' => (int) $row['total'],
+            'active' => (int) $row['active'],
+            'byCategory' => $byCategory,
+            'missing' => $missing,
+        ];
     }
 
     /**
