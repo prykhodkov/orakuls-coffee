@@ -7,8 +7,10 @@ namespace App\Repository;
 use App\Domain\Languages;
 use App\Domain\Phrase;
 use App\Domain\PhraseFilter;
+use App\Domain\PhraseInput;
 use PDO;
 use PDOStatement;
+use RuntimeException;
 
 /**
  * Запити до таблиці phrases. SQL живе тут, а не в контролерах (D-17): ним користуватимуться
@@ -96,6 +98,73 @@ final class PhraseRepository
         $row = $stmt->fetch();
 
         return $row === false ? null : Phrase::fromRow($row);
+    }
+
+    /**
+     * Додає фразу. Два запити: INSERT і find. created_at і updated_at заповнює один UTC_TIMESTAMP() (D-29),
+     * тож при створенні вони збігаються. Текст пишеться як є (нормалізував валідатор), лише параметрами.
+     */
+    public function create(PhraseInput $input): Phrase
+    {
+        $columns = [];
+        foreach (Languages::CODES as $lang) {
+            $columns[] = '`' . Languages::column($lang) . '`';
+        }
+
+        $stmt = $this->pdo->prepare(
+            'INSERT INTO `phrases` (`category`, ' . implode(', ', $columns) . ', `is_active`, `created_at`, `updated_at`)'
+            . ' VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())'
+        );
+        $stmt->bindValue(1, $input->category, PDO::PARAM_STR);
+        foreach (Languages::CODES as $i => $lang) {
+            $stmt->bindValue($i + 2, $input->text[$lang], PDO::PARAM_STR);
+        }
+        $stmt->bindValue(5, $input->isActive ? 1 : 0, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $phrase = $this->find((int) $this->pdo->lastInsertId());
+        if ($phrase === null) {
+            throw new RuntimeException('Phrase disappeared right after INSERT');
+        }
+
+        return $phrase;
+    }
+
+    /**
+     * Повна заміна category, text, is_active; created_at не чіпаємо, updated_at = зараз (UTC). Два запити: UPDATE і find.
+     * null — фрази з таким id немає. rowCount() не використовується: після UPDATE без фактичних змін
+     * (ті самі дані в ту ж секунду) він дає 0, як і для неіснуючого id (D-29).
+     */
+    public function update(int $id, PhraseInput $input): ?Phrase
+    {
+        $assignments = [];
+        foreach (Languages::CODES as $lang) {
+            $assignments[] = '`' . Languages::column($lang) . '` = ?';
+        }
+
+        $stmt = $this->pdo->prepare(
+            'UPDATE `phrases` SET `category` = ?, ' . implode(', ', $assignments)
+            . ', `is_active` = ?, `updated_at` = UTC_TIMESTAMP() WHERE `id` = ?'
+        );
+        $stmt->bindValue(1, $input->category, PDO::PARAM_STR);
+        foreach (Languages::CODES as $i => $lang) {
+            $stmt->bindValue($i + 2, $input->text[$lang], PDO::PARAM_STR);
+        }
+        $stmt->bindValue(5, $input->isActive ? 1 : 0, PDO::PARAM_INT);
+        $stmt->bindValue(6, $id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $this->find($id);
+    }
+
+    /** Видаляє фразу; false — такого id немає. Один запит. */
+    public function delete(int $id): bool
+    {
+        $stmt = $this->pdo->prepare('DELETE FROM `phrases` WHERE `id` = ?');
+        $stmt->bindValue(1, $id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        return $stmt->rowCount() > 0;
     }
 
     /**
