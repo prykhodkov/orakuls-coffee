@@ -5,6 +5,7 @@ declare(strict_types=1);
 use App\Controller\AuthController;
 use App\Controller\HealthController;
 use App\Controller\MessageController;
+use App\Controller\PhraseController;
 use App\Http\Router;
 
 return static function (Router $router): void {
@@ -17,4 +18,8 @@ return static function (Router $router): void {
     // Адмінка. Захист /api/admin/* — у Kernel (AdminGuard), контролери перевірку токена не повторюють
     $router->post('/api/admin/auth/login', [new AuthController(), 'login']);
     $router->get('/api/admin/auth/me', [new AuthController(), 'me']);
+
+    // Фрази (читання). Захист — AdminGuard у Kernel
+    $router->get('/api/admin/phrases', [new PhraseController(), 'index']);
+    $router->get('/api/admin/phrases/{id}', [new PhraseController(), 'show']);
 };
