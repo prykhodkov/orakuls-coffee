@@ -19,7 +19,11 @@ return static function (Router $router): void {
     $router->post('/api/admin/auth/login', [new AuthController(), 'login']);
     $router->get('/api/admin/auth/me', [new AuthController(), 'me']);
 
-    // Фрази (читання). Захист — AdminGuard у Kernel
+    // Фрази (читання і запис). Захист — AdminGuard у Kernel.
+    // Літеральні маршрути (імпорт, статистика) реєструвати ПЕРЕД маршрутами з {id}
     $router->get('/api/admin/phrases', [new PhraseController(), 'index']);
+    $router->post('/api/admin/phrases', [new PhraseController(), 'create']);
     $router->get('/api/admin/phrases/{id}', [new PhraseController(), 'show']);
+    $router->put('/api/admin/phrases/{id}', [new PhraseController(), 'update']);
+    $router->delete('/api/admin/phrases/{id}', [new PhraseController(), 'delete']);
 };

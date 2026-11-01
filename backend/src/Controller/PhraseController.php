@@ -8,6 +8,8 @@ use App\Domain\Categories;
 use App\Domain\Languages;
 use App\Domain\Phrase;
 use App\Domain\PhraseFilter;
+use App\Domain\PhraseInput;
+use App\Domain\PhraseValidator;
 use App\Http\Request;
 use App\Http\Response;
 use App\Repository\PhraseRepository;
@@ -15,7 +17,7 @@ use App\Support\ApiException;
 use App\Support\Db;
 
 /**
- * Читання фраз для адмінки: GET /api/admin/phrases і GET /api/admin/phrases/{id}.
+ * Фрази для адмінки: читання (GET /api/admin/phrases, GET /api/admin/phrases/{id}) і запис (POST, PUT, DELETE).
  * Токен перевіряє AdminGuard у Kernel (D-20), тут його не повторюємо.
  * Явні фільтри строгі (на відміну від exclude у BE-003): невідоме значення — 400, бо адмін обирає їх сам.
  * Валідація завершується до звернення до БД: відхилений запит не виконує жодного SQL.
@@ -46,18 +48,86 @@ final class PhraseController
 
     public function show(Request $request, array $params): Response
     {
-        $id = $params['id'];
-        // D: без нього $ пропустив би перенос рядка в кінці ("1\n")
-        if (preg_match('/^[1-9][0-9]{0,9}$/D', $id) !== 1) {
-            throw ApiException::notFound('Phrase not found');
-        }
+        $id = self::parseId($params['id']);
 
-        $phrase = (new PhraseRepository(Db::pdo()))->find((int) $id);
+        $phrase = (new PhraseRepository(Db::pdo()))->find($id);
         if ($phrase === null) {
             throw ApiException::notFound('Phrase not found');
         }
 
         return Response::json($phrase->toArray(), 200, ['Cache-Control' => 'no-store']);
+    }
+
+    /**
+     * POST /api/admin/phrases. Порядок: тіло (400) → валідація (422) → запис. БД відкривається лише після валідації.
+     */
+    public function create(Request $request, array $params): Response
+    {
+        $input = self::validatedInput($request);
+
+        $phrase = (new PhraseRepository(Db::pdo()))->create($input);
+
+        return Response::json($phrase->toArray(), 201, ['Cache-Control' => 'no-store']);
+    }
+
+    /**
+     * PUT /api/admin/phrases/{id} — повна заміна. Порядок: формат id (404) → тіло (400) → валідація (422) → запис (немає фрази — 404).
+     */
+    public function update(Request $request, array $params): Response
+    {
+        $id = self::parseId($params['id']);
+        $input = self::validatedInput($request);
+
+        $phrase = (new PhraseRepository(Db::pdo()))->update($id, $input);
+        if ($phrase === null) {
+            throw ApiException::notFound('Phrase not found');
+        }
+
+        return Response::json($phrase->toArray(), 200, ['Cache-Control' => 'no-store']);
+    }
+
+    /**
+     * DELETE /api/admin/phrases/{id} → 204 без тіла. Порядок: формат id (404) → видалення (немає фрази — 404).
+     */
+    public function delete(Request $request, array $params): Response
+    {
+        $id = self::parseId($params['id']);
+
+        if (!(new PhraseRepository(Db::pdo()))->delete($id)) {
+            throw ApiException::notFound('Phrase not found');
+        }
+
+        return new Response(204, null, ['Cache-Control' => 'no-store']);
+    }
+
+    /**
+     * Канонічний id зі шляху: без нулів попереду, знака й дробової частини; неканонічний → 404.
+     *
+     * @throws ApiException 404
+     */
+    private static function parseId(string $id): int
+    {
+        // D: без нього $ пропустив би перенос рядка в кінці ("1\n")
+        if (preg_match('/^[1-9][0-9]{0,9}$/D', $id) !== 1) {
+            throw ApiException::notFound('Phrase not found');
+        }
+
+        return (int) $id;
+    }
+
+    /**
+     * Тіло запиту → нормалізовані дані фрази.
+     *
+     * @throws ApiException 400 (не JSON-об'єкт), 422 (поля; усі помилки разом)
+     */
+    private static function validatedInput(Request $request): PhraseInput
+    {
+        $result = PhraseValidator::validate($request->json());
+        if ($result['input'] === null) {
+            throw ApiException::validation($result['fields']);
+        }
+
+        return $result['input'];
     }
 
     /**
