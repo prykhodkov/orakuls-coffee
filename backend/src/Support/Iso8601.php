@@ -25,4 +25,10 @@ final class Iso8601
 
         return $parsed->format('Y-m-d\TH:i:s\Z');
     }
+
+    /** Unix-час → '2026-10-26T18:30:00Z' (UTC). Для моментів, обчислених у PHP, а не прочитаних з БД. */
+    public static function fromTimestamp(int $timestamp): string
+    {
+        return gmdate('Y-m-d\TH:i:s\Z', $timestamp);
+    }
 }

@@ -53,7 +53,7 @@ final class ErrorHandler
     public static function toResponse(Throwable $e): Response
     {
         if ($e instanceof ApiException) {
-            return self::build($e->status, $e->errorCode, $e->getMessage(), $e->fields);
+            return self::build($e->status, $e->errorCode, $e->getMessage(), $e->fields, $e->headers);
         }
 
         // Деталі лише в лог — клієнту без stack trace і внутрішніх шляхів.
@@ -64,14 +64,15 @@ final class ErrorHandler
 
     /**
      * @param array<string, string> $fields
+     * @param array<string, string> $headers заголовки винятку (Retry-After); no-store вони не можуть прибрати, лише доповнити
      */
-    private static function build(int $status, string $code, string $message, array $fields = []): Response
+    private static function build(int $status, string $code, string $message, array $fields = [], array $headers = []): Response
     {
         $error = ['code' => $code, 'message' => $message];
         if ($code === 'validation_error') {
             $error['fields'] = Json::object($fields);
         }
 
-        return Response::json(['error' => $error], $status, ['Cache-Control' => 'no-store']);
+        return Response::json(['error' => $error], $status, ['Cache-Control' => 'no-store'] + $headers);
     }
 }

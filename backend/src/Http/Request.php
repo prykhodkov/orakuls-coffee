@@ -19,6 +19,7 @@ final class Request
         public readonly array $query = [],
         private readonly array $headers = [],
         private readonly string $body = '',
+        public readonly string $ip = 'unknown',
     ) {
     }
 
@@ -26,12 +27,18 @@ final class Request
     {
         $path = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 
+        // Лише REMOTE_ADDR: X-Forwarded-For підробляється клієнтом, тож ліміт спроб входу на ньому не будуємо (D-22).
+        // Валідація гарантує, що значення вміщується в VARCHAR(45) таблиці login_attempts.
+        $ip = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+        $ip = filter_var($ip, FILTER_VALIDATE_IP) !== false ? $ip : 'unknown';
+
         return new self(
             strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET'),
             rtrim($path, '/') ?: '/',
             $_GET,
             self::collectHeaders(),
             (string) file_get_contents('php://input'),
+            $ip,
         );
     }
 
