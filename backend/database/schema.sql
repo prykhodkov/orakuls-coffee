@@ -26,5 +26,15 @@ CREATE TABLE IF NOT EXISTS `phrases` (
   KEY `idx_phrases_is_active` (`is_active`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ---- 002_create_login_attempts.sql ----
+CREATE TABLE IF NOT EXISTS `login_attempts` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `ip` VARCHAR(45) NOT NULL,
+  `attempted_at` DATETIME NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_login_attempts_ip_time` (`ip`, `attempted_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 INSERT IGNORE INTO `migrations` (`name`, `applied_at`) VALUES
-  ('001_create_phrases.sql', UTC_TIMESTAMP());
+  ('001_create_phrases.sql', UTC_TIMESTAMP()),
+  ('002_create_login_attempts.sql', UTC_TIMESTAMP());

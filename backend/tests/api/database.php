@@ -22,15 +22,15 @@ function phraseColumns(PDO $pdo): array
     return array_column($rows, null, 'COLUMN_NAME');
 }
 
-test('міграції створили migrations і phrases; у migrations є 001_create_phrases.sql', function () {
+test('міграції створили login_attempts, migrations і phrases; у migrations записані всі файли міграцій', function () {
     $pdo = testPdo();
     $tables = $pdo->query(
         "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"
     )->fetchAll(PDO::FETCH_COLUMN);
 
-    assertSame(['migrations', 'phrases'], $tables);
+    assertSame(['login_attempts', 'migrations', 'phrases'], $tables);
     assertSame(
-        ['001_create_phrases.sql'],
+        App\Database\Migrator::files(APP_ROOT . '/database/migrations'),
         $pdo->query('SELECT name FROM migrations ORDER BY name')->fetchAll(PDO::FETCH_COLUMN)
     );
 });
@@ -44,15 +44,49 @@ test('повторний up() повертає [] і не чіпає дані т
     assertSame([], testMigrator()->up());
 
     assertSame($before, phraseCount($pdo), 'кількість фраз');
-    assertSame(1, (int) $pdo->query('SELECT COUNT(*) FROM migrations')->fetchColumn(), 'рядків у migrations');
+    assertSame(
+        count(App\Database\Migrator::files(APP_ROOT . '/database/migrations')),
+        (int) $pdo->query('SELECT COUNT(*) FROM migrations')->fetchColumn(),
+        'рядків у migrations'
+    );
     assertSame($appliedAt, $pdo->query('SELECT applied_at FROM migrations')->fetchAll(PDO::FETCH_COLUMN));
 });
 
-test('status(): pending порожній, applied містить 001', function () {
+test('status(): pending порожній, applied дорівнює списку файлів міграцій', function () {
     $status = testMigrator()->status();
 
     assertSame([], $status['pending']);
-    assertSame(['001_create_phrases.sql'], $status['applied']);
+    assertSame(App\Database\Migrator::files(APP_ROOT . '/database/migrations'), $status['applied']);
+});
+
+test('login_attempts: типи, NOT NULL, attempted_at без DEFAULT, індекс (ip, attempted_at), InnoDB, utf8mb4_unicode_ci', function () {
+    $pdo = testPdo();
+    $columns = array_column($pdo->query(
+        'SELECT COLUMN_NAME, COLUMN_TYPE, COLLATION_NAME, IS_NULLABLE, COLUMN_DEFAULT, EXTRA FROM information_schema.COLUMNS'
+        . " WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'login_attempts'"
+    )->fetchAll(), null, 'COLUMN_NAME');
+
+    assertSame(['id', 'ip', 'attempted_at'], array_keys($columns), 'набір колонок');
+    assertSame('bigint(20) unsigned', $columns['id']['COLUMN_TYPE']);
+    assertTrue(str_contains($columns['id']['EXTRA'], 'auto_increment'), 'id AUTO_INCREMENT');
+    assertSame('varchar(45)', $columns['ip']['COLUMN_TYPE']);
+    assertSame('NO', $columns['ip']['IS_NULLABLE']);
+    assertSame('utf8mb4_unicode_ci', $columns['ip']['COLLATION_NAME']);
+    assertSame('datetime', $columns['attempted_at']['COLUMN_TYPE']);
+    assertSame('NO', $columns['attempted_at']['IS_NULLABLE']);
+    assertSame(null, $columns['attempted_at']['COLUMN_DEFAULT'], 'attempted_at: DEFAULT має бути відсутній');
+
+    $index = $pdo->query(
+        'SELECT COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()'
+        . " AND TABLE_NAME = 'login_attempts' AND INDEX_NAME = 'idx_login_attempts_ip_time' ORDER BY SEQ_IN_INDEX"
+    )->fetchAll(PDO::FETCH_COLUMN);
+    assertSame(['ip', 'attempted_at'], $index, 'індекс по (ip, attempted_at) у цьому порядку');
+
+    $table = $pdo->query(
+        "SELECT ENGINE, TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'login_attempts'"
+    )->fetch();
+    assertSame('InnoDB', $table['ENGINE']);
+    assertSame('utf8mb4_unicode_ci', $table['TABLE_COLLATION']);
 });
 
 test('phrases: InnoDB, utf8mb4_unicode_ci у таблиці й усіх текстових колонках', function () {
@@ -235,7 +269,7 @@ test('міграція з помилкою в другому операторі 
     $pdo = testPdo();
     $dir = sys_get_temp_dir() . '/orakuls-mig-fail-' . getmypid();
     mkdir($dir);
-    $file = $dir . '/002_probe.sql';
+    $file = $dir . '/900_probe.sql';
 
     try {
         // Другий оператор падає: саме цей випадок PDO::exec() з кількома операторами пропускає мовчки
@@ -243,19 +277,23 @@ test('міграція з помилкою в другому операторі 
         $migrator = new App\Database\Migrator($pdo, $dir);
 
         $e = assertThrows(fn () => $migrator->up(), RuntimeException::class);
-        assertTrue(str_contains($e->getMessage(), '002_probe.sql') && str_contains($e->getMessage(), 'statement #2'), $e->getMessage());
-        assertSame(['002_probe.sql'], $migrator->status()['pending'], 'невдала міграція не записана в migrations');
+        assertTrue(str_contains($e->getMessage(), '900_probe.sql') && str_contains($e->getMessage(), 'statement #2'), $e->getMessage());
+        assertSame(['900_probe.sql'], $migrator->status()['pending'], 'невдала міграція не записана в migrations');
 
         // З'єднання лишається придатним (немає 2014 pending result sets)
         assertSame(1, (int) $pdo->query('SELECT 1')->fetchColumn());
-        assertSame(['001_create_phrases.sql'], $migrator->status()['applied'], '002 не записана');
+        assertSame(
+            App\Database\Migrator::files(APP_ROOT . '/database/migrations'),
+            $migrator->status()['applied'],
+            '900_probe не записана, лише реальні міграції'
+        );
 
         // Виправлений файл при повторному запуску доробляє решту й застосовується
         file_put_contents($file, "CREATE TABLE IF NOT EXISTS `probe` (id INT);\nINSERT INTO `probe` VALUES (1);\n");
-        assertSame(['002_probe.sql'], $migrator->up());
+        assertSame(['900_probe.sql'], $migrator->up());
     } finally {
         $pdo->exec('DROP TABLE IF EXISTS `probe`');
-        $pdo->exec("DELETE FROM migrations WHERE name = '002_probe.sql'");
+        $pdo->exec("DELETE FROM migrations WHERE name = '900_probe.sql'");
         @unlink($file);
         @rmdir($dir);
     }
