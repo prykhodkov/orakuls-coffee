@@ -17,6 +17,8 @@ use App\Domain\Categories;
 use App\Domain\Languages;
 use App\Domain\Phrase;
 use App\Domain\PhraseFilter;
+use App\Domain\PhraseInput;
+use App\Domain\PhraseValidator;
 use App\Http\Request;
 use App\Http\Response;
 use App\Http\Router;
@@ -1321,6 +1323,219 @@ test('parseFilter: усі параметри разом', function () {
         ['mood', 'šodien', 'en', true, 2, 10],
         parsedFilter(['category' => 'mood', 'search' => ' šodien ', 'missing' => 'en', 'isActive' => 'true', 'page' => '2', 'perPage' => '10'])
     );
+});
+
+// ---------- BE-006: PhraseValidator ----------
+
+/** Валідне тіло запиту; $override замінює ключі, null-значення в $override НЕ видаляє ключ (для цього — pvBodyWithout). */
+function pvBody(array $override = []): array
+{
+    return array_replace(['category' => 'love', 'text' => ['lv' => 'Sveiki', 'en' => 'Hello', 'ru' => 'Привет']], $override);
+}
+
+function pvBodyWithout(string $key, array $override = []): array
+{
+    $body = pvBody($override);
+    unset($body[$key]);
+
+    return $body;
+}
+
+/** Валідне тіло, де text.$lang замінено на $value (решта мов — короткі непорожні тексти). */
+function pvText(string $lang, mixed $value): array
+{
+    return pvBody(['text' => ['lv' => 'a', 'en' => 'b', 'ru' => 'c', $lang => $value]]);
+}
+
+/** @return array<string, string> fields після валідації */
+function pvFields(array $data): array
+{
+    return PhraseValidator::validate($data)['fields'];
+}
+
+test('phraseValidator: валідне тіло → fields порожні, input заповнений, тексти trimmed, isActive за замовчуванням true', function () {
+    $result = PhraseValidator::validate(pvBody(['text' => ['lv' => "  Sveiki\n", 'en' => "\u{00A0}Hello\u{3000}", 'ru' => 'Привет']]));
+
+    assertSame([], $result['fields']);
+    assertTrue($result['input'] instanceof PhraseInput);
+    assertSame('love', $result['input']->category);
+    assertSame(['lv' => 'Sveiki', 'en' => 'Hello', 'ru' => 'Привет'], $result['input']->text);
+    assertSame(true, $result['input']->isActive);
+
+    $inactive = PhraseValidator::validate(pvBody(['isActive' => false]));
+    assertSame(false, $inactive['input']->isActive);
+
+    foreach (Categories::CODES as $code) {
+        assertSame([], pvFields(pvBody(['category' => $code])), $code);
+    }
+
+    $bad = PhraseValidator::validate(pvBody(['category' => 'x']));
+    assertSame(null, $bad['input'], 'input = null, коли є помилки');
+});
+
+test('phraseValidator: category — немає / null → required; не з переліку, не рядок → invalid', function () {
+    assertSame(['category' => 'required'], pvFields(pvBodyWithout('category')));
+    assertSame(['category' => 'required'], pvFields(pvBody(['category' => null])));
+    foreach (['LOVE', 'love ', ' love', "love\n", '5', 5, ['love'], '', true, false, 1.5] as $bad) {
+        assertSame(['category' => 'invalid'], pvFields(pvBody(['category' => $bad])), 'category=' . json_encode($bad));
+    }
+});
+
+test('phraseValidator: text — немає → required; не об\'єкт → invalid; {} і [] — об\'єкт без ключів', function () {
+    assertSame(['text' => 'required'], pvFields(pvBodyWithout('text')));
+    foreach (['abc', 5, null, true, false, ['a', 'b', 'c'], ['x']] as $bad) {
+        assertSame(['text' => 'invalid'], pvFields(pvBody(['text' => $bad])), 'text=' . json_encode($bad));
+    }
+    // json_decode('{}') і json_decode('[]') дають однаковий порожній масив
+    assertSame(
+        ['text.lv' => 'required', 'text.en' => 'required', 'text.ru' => 'required'],
+        pvFields(pvBody(['text' => []]))
+    );
+});
+
+test('phraseValidator: text.xx — немає ключа → required; не рядок → invalid; невалідний UTF-8 → invalid', function () {
+    foreach (Languages::CODES as $lang) {
+        $text = ['lv' => 'a', 'en' => 'b', 'ru' => 'c'];
+        unset($text[$lang]);
+        assertSame(["text.{$lang}" => 'required'], pvFields(pvBody(['text' => $text])), "без {$lang}");
+
+        foreach ([5, null, true, false, ['x'], [], 1.5] as $bad) {
+            assertSame(["text.{$lang}" => 'invalid'], pvFields(pvText($lang, $bad)), "{$lang}=" . json_encode($bad));
+        }
+        assertSame(["text.{$lang}" => 'invalid'], pvFields(pvText($lang, "\xff")), "{$lang}: \\xff");
+        assertSame(["text.{$lang}" => 'invalid'], pvFields(pvText($lang, "ok\xC3")), "{$lang}: обірваний UTF-8");
+    }
+});
+
+test('phraseValidator: довжина рахується в символах після trim — 500 ок, 501 → too_long', function () {
+    foreach (['a', 'š', 'я', '😀'] as $char) {
+        foreach (Languages::CODES as $lang) {
+            assertSame([], pvFields(pvText($lang, str_repeat($char, 500))), "500 × {$char} ({$lang})");
+            assertSame(["text.{$lang}" => 'too_long'], pvFields(pvText($lang, str_repeat($char, 501))), "501 × {$char} ({$lang})");
+        }
+    }
+    assertSame([], pvFields(pvText('lv', '  ' . str_repeat('a', 500) . "  \n")), 'пробіли навколо не рахуються');
+    assertSame([], pvFields(pvText('lv', "\u{00A0}\u{3000}" . str_repeat('a', 500) . "\u{FEFF}")), 'юнікодні пробіли навколо не рахуються');
+    assertSame(['text.lv' => 'too_long'], pvFields(pvText('lv', ' ' . str_repeat('a', 501) . ' ')));
+    // Пробіли всередині рахуються
+    assertSame(['text.lv' => 'too_long'], pvFields(pvText('lv', str_repeat('a ', 251))));
+});
+
+test('phraseValidator: text = empty, коли всі три порожні після trim і немає помилок text.xx', function () {
+    $blanks = ['', '   ', "\n", "\t", "\r\n", "\u{00A0}", "\u{3000}", "\u{FEFF}", "\u{2028}", " \u{00A0}\n\u{3000}\u{FEFF}\t"];
+    foreach ($blanks as $blank) {
+        $body = pvBody(['text' => ['lv' => $blank, 'en' => $blank, 'ru' => $blank]]);
+        assertSame(['text' => 'empty'], pvFields($body), json_encode($blank));
+    }
+    assertSame(['text' => 'empty'], pvFields(pvBody(['text' => ['lv' => '', 'en' => ' ', 'ru' => "\u{00A0}"]])));
+
+    // Одна непорожня мова — ок
+    assertSame([], pvFields(pvBody(['text' => ['lv' => '', 'en' => 'x', 'ru' => '']])));
+
+    // Помилка text.xx замінює empty
+    assertSame(['text.lv' => 'invalid'], pvFields(pvBody(['text' => ['lv' => 5, 'en' => '', 'ru' => '']])));
+    assertSame(['text.ru' => 'required'], pvFields(pvBody(['text' => ['lv' => '', 'en' => '']])));
+    assertSame(['text.en' => 'invalid'], pvFields(pvBody(['text' => ['lv' => '', 'en' => "a\0", 'ru' => '']])));
+
+    // \u{200B} і \u{0085} не обрізаються (як і в JS) — це текст, а не порожнеча
+    assertSame([], pvFields(pvBody(['text' => ['lv' => "\u{200B}", 'en' => '', 'ru' => '']])));
+    assertSame([], pvFields(pvBody(['text' => ['lv' => "\u{0085}", 'en' => '', 'ru' => '']])));
+});
+
+test('phraseValidator: керівні символи (крім \\t \\n \\r) → invalid; решта проходить без змін', function () {
+    foreach (["a\0b", "a\x01", "a\x02", "a\x7F", "a\x0Bb", "a\x0Cb", "a\x08", "a\x0E", "a\x1F", "\x01hi", "hi\x02", "\x7Fhi"] as $bad) {
+        foreach (Languages::CODES as $lang) {
+            assertSame(["text.{$lang}" => 'invalid'], pvFields(pvText($lang, $bad)), "{$lang}=" . json_encode($bad));
+        }
+    }
+
+    foreach (["a\nb", "a\r\nb", "a\tb", 'š я 😀', "\u{0080}", "\u{009F}", "a\u{200B}b", '<script>alert(1)</script>', "'; DROP TABLE phrases; --"] as $ok) {
+        $result = PhraseValidator::validate(pvText('lv', $ok));
+        assertSame([], $result['fields'], json_encode($ok));
+        assertSame($ok, $result['input']->text['lv'], 'текст не змінюється: ' . json_encode($ok));
+    }
+});
+
+test('phraseValidator: невалідний UTF-8 не дає виняткової ситуації чи null-помилки preg_*', function () {
+    foreach (["\xff", "\xC3", "\xED\xA0\x80", "a\xffb", " \xff "] as $bad) {
+        $result = PhraseValidator::validate(pvText('en', $bad));
+        assertSame(['text.en' => 'invalid'], $result['fields'], json_encode($bad, JSON_INVALID_UTF8_SUBSTITUTE));
+        assertSame(null, $result['input']);
+    }
+    // trim() окремо: невалідний UTF-8 повертається як є, а не null
+    assertSame("\xff", PhraseValidator::trim("\xff"));
+});
+
+test('phraseValidator: isActive — немає → true; bool як є; решта → invalid', function () {
+    assertSame(true, PhraseValidator::validate(pvBody())['input']->isActive);
+    assertSame(true, PhraseValidator::validate(pvBody(['isActive' => true]))['input']->isActive);
+    assertSame(false, PhraseValidator::validate(pvBody(['isActive' => false]))['input']->isActive);
+    foreach (['yes', 'true', '', 1, 0, null, [], ['true'], 1.0] as $bad) {
+        assertSame(['isActive' => 'invalid'], pvFields(pvBody(['isActive' => $bad])), 'isActive=' . json_encode($bad));
+    }
+});
+
+test('phraseValidator: кілька помилок збираються разом у порядку category, text, isActive', function () {
+    $fields = pvFields(['category' => 'x', 'text' => ['lv' => 5, 'en' => '', 'ru' => 'y'], 'isActive' => 'no']);
+    assertSame(['category' => 'invalid', 'text.lv' => 'invalid', 'isActive' => 'invalid'], $fields);
+    assertSame(['category', 'text.lv', 'isActive'], array_keys($fields), 'порядок ключів значущий');
+
+    assertSame(
+        ['category' => 'required', 'text' => 'required'],
+        pvFields([]),
+        'порожнє тіло: required для обов\'язкових, isActive має значення за замовчуванням'
+    );
+
+    assertSame(
+        ['category' => 'required', 'text.lv' => 'too_long', 'text.en' => 'required', 'text.ru' => 'invalid', 'isActive' => 'invalid'],
+        pvFields(['text' => ['lv' => str_repeat('a', 501), 'ru' => "a\0"], 'isActive' => 1])
+    );
+});
+
+test('phraseValidator: зайві ключі (id, createdAt, text.de) ігноруються і до PhraseInput не потрапляють', function () {
+    $body = pvBody(['id' => 999, 'createdAt' => '2000-01-01T00:00:00Z', 'extra' => ['x'], 'text' => ['lv' => 'a', 'en' => 'b', 'ru' => 'c', 'de' => 'Hallo']]);
+    $result = PhraseValidator::validate($body);
+
+    assertSame([], $result['fields']);
+    assertSame(['lv' => 'a', 'en' => 'b', 'ru' => 'c'], $result['input']->text);
+    assertSame(['category', 'text', 'isActive'], array_keys(get_object_vars($result['input'])));
+
+    // Зайвий ключ з поганим значенням помилки не дає
+    assertSame([], pvFields(pvBody(['text' => ['lv' => 'a', 'en' => 'b', 'ru' => 'c', 'de' => 5]])));
+});
+
+test('phraseValidator::trim — як JS trim: юнікодні пробіли по краях прибираються, U+200B / U+0085 / U+180E лишаються', function () {
+    foreach (
+        [
+            "\u{00A0}x\u{00A0}" => 'x', "\u{3000}x\u{3000}" => 'x', "\u{FEFF}x\u{FEFF}" => 'x', "\u{2028}x\u{2029}" => 'x',
+            "\r\nx\r\n" => 'x', "\tx\t" => 'x', " \n x \n " => 'x', "\u{1680}x\u{202F}\u{205F}" => 'x',
+            "\u{2000}\u{2005}\u{200A}x" => 'x', "\x0Bx\x0C" => 'x',
+            "\u{200B}x\u{200B}" => "\u{200B}x\u{200B}", "\u{0085}x\u{0085}" => "\u{0085}x\u{0085}", "\u{180E}x\u{180E}" => "\u{180E}x\u{180E}",
+            "a  b \u{00A0} c" => "a  b \u{00A0} c", "😀 " => '😀', ' 😀' => '😀', '' => '', "\u{00A0}" => '', "a\0 " => "a\0",
+        ] as $input => $expected
+    ) {
+        assertSame($expected, PhraseValidator::trim((string) $input), json_encode((string) $input));
+    }
+});
+
+test('phraseValidator: домен не залежить від Http і Repository; trim довгої серії пробілів усередині працює лінійно', function () {
+    foreach (['PhraseValidator', 'PhraseInput'] as $class) {
+        $source = (string) file_get_contents(APP_ROOT . "/src/Domain/{$class}.php");
+        assertTrue(!str_contains($source, 'use App\\Http'), "{$class}: use App\\Http");
+        assertTrue(!str_contains($source, 'use App\\Repository'), "{$class}: use App\\Repository");
+    }
+
+    // Серії понад pcre.backtrack_limit (1 000 000): без присвійного ++ preg_replace повертав би null,
+    // і обрізання мовчки пропускалось би (трейлінг після серії лишався б у тексті)
+    $start = hrtime(true);
+    assertSame(2000002, strlen(PhraseValidator::trim('a' . str_repeat(' ', 2000000) . 'b')));
+    assertSame(2000002, strlen(PhraseValidator::trim(" 
+ a" . str_repeat("
+", 2000000) . "b 
+ ")));
+    assertSame('a', PhraseValidator::trim(str_repeat(' ', 2000000) . 'a' . str_repeat(' ', 2000000)));
+    assertSame(0, preg_last_error(), 'preg_replace не повинен падати на довгих серіях');
+    assertTrue((hrtime(true) - $start) / 1e6 < 1000, 'trim не повинен бути квадратичним');
 });
 
 // ---------- Запуск ----------

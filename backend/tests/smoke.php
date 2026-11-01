@@ -120,6 +120,16 @@ check('GET /api/admin/phrases/1 без токена → 401', $unauthorized($r),
 $r = call('GET', "{$base}/api/admin/phrases?perPage=0");
 check('GET /api/admin/phrases?perPage=0 без токена → 401 (guard раніше за валідацію)', $unauthorized($r), "status={$r['status']} body={$r['body']}");
 
+// Запис фраз (BE-006): без токена всі три відхиляються guard'ом ще до тіла й БД — на хостингу нічого не пишеться
+$r = call('POST', "{$base}/api/admin/phrases", '{}');
+check('POST /api/admin/phrases без токена → 401', $unauthorized($r), "status={$r['status']} body={$r['body']}");
+
+$r = call('PUT', "{$base}/api/admin/phrases/1", '{}');
+check('PUT /api/admin/phrases/1 без токена → 401', $unauthorized($r), "status={$r['status']} body={$r['body']}");
+
+$r = call('DELETE', "{$base}/api/admin/phrases/1");
+check('DELETE /api/admin/phrases/1 без токена → 401', $unauthorized($r), "status={$r['status']} body={$r['body']}");
+
 $r = call('GET', "{$base}/api/admin/nope");
 check('GET невідомого /api/admin/… без токена → 401, а не 404', $unauthorized($r), "status={$r['status']} body={$r['body']}");
 
