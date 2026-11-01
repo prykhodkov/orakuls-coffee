@@ -5,57 +5,29 @@ declare(strict_types=1);
 // Юнит-перевірки каркаса без PHPUnit і без БД.
 // Запуск: docker compose run --rm --no-deps php php tests/run.php
 
-use App\Http\Kernel;
+use App\Database\DatabaseGuard;
+use App\Database\Migrator;
+use App\Database\SchemaBuilder;
+use App\Database\Seeder;
+use App\Database\SqlSplitter;
+use App\Domain\Categories;
+use App\Domain\Languages;
 use App\Http\Request;
 use App\Http\Response;
 use App\Http\Router;
 use App\Support\ApiException;
 use App\Support\Config;
+use App\Support\Iso8601;
 use App\Support\Json;
 
 define('APP_ROOT', dirname(__DIR__));
 require APP_ROOT . '/src/bootstrap.php';
+require __DIR__ . '/lib.php';
 
 // error_log() у тестах іде в тимчасовий файл, щоб перевірити, що деталі помилки потрапляють в лог
 $testLog = sys_get_temp_dir() . '/orakuls-test-' . getmypid() . '.log';
 ini_set('error_log', $testLog);
-
-/** @var array<string, callable> $tests */
-$tests = [];
-
-function test(string $name, callable $fn): void
-{
-    global $tests;
-    $tests[$name] = $fn;
-}
-
-function assertSame(mixed $expected, mixed $actual, string $note = ''): void
-{
-    if ($expected !== $actual) {
-        throw new AssertionError(
-            ($note !== '' ? "{$note}: " : '')
-            . 'expected ' . var_export($expected, true) . ', got ' . var_export($actual, true)
-        );
-    }
-}
-
-function assertTrue(bool $condition, string $note = ''): void
-{
-    assertSame(true, $condition, $note);
-}
-
-function decode(Response $response): array
-{
-    return json_decode((string) $response->body, true, 512, JSON_THROW_ON_ERROR);
-}
-
-function kernelWith(callable $configure): Kernel
-{
-    $router = new Router();
-    $configure($router);
-
-    return new Kernel($router);
-}
+register_shutdown_function(static fn () => @unlink($testLog));
 
 // ---------- Роутер ----------
 
@@ -290,20 +262,216 @@ test('config: require кидає виняток для відсутнього з
     }
 });
 
-// ---------- Запуск ----------
 
-$failed = 0;
-foreach ($tests as $name => $fn) {
-    try {
-        $fn();
-        echo "  ok    {$name}\n";
-    } catch (Throwable $e) {
-        $failed++;
-        echo "  FAIL  {$name}\n        " . $e::class . ': ' . $e->getMessage() . "\n";
+// ---------- SqlSplitter ----------
+
+test('sql-splitter: два оператори, із кінцевим «;» і без нього', function () {
+    assertSame(['A', 'B'], SqlSplitter::split('A; B;'));
+    assertSame(['A', 'B'], SqlSplitter::split("A;\nB"));
+});
+
+test('sql-splitter: «;» усередині \'…\', "…" і `…` не розриває оператор', function () {
+    $sql = 'INSERT INTO t VALUES (\'a;b\'); SELECT "c;d"; SELECT `e;f` FROM x';
+
+    assertSame(['INSERT INTO t VALUES (\'a;b\')', 'SELECT "c;d"', 'SELECT `e;f` FROM x'], SqlSplitter::split($sql));
+});
+
+test('sql-splitter: \\\' і \'\' усередині рядка не закривають його', function () {
+    $sql = <<<'SQL'
+    SELECT 'it\'s; ok', 'it''s; ok';
+    SELECT 2;
+    SQL;
+
+    assertSame(["SELECT 'it\\'s; ok', 'it''s; ok'", 'SELECT 2'], SqlSplitter::split($sql));
+});
+
+test('sql-splitter: -- коментар із «;» зникає й не розриває оператор', function () {
+    assertSame(['SELECT 1'], SqlSplitter::split("-- коментар; з крапкою з комою\nSELECT 1;"));
+
+    $inline = SqlSplitter::split("SELECT 1 -- хвіст; тут\n, 2;");
+    assertSame(1, count($inline));
+    assertTrue(!str_contains($inline[0], 'хвіст') && str_contains($inline[0], ', 2'));
+});
+
+test('sql-splitter: # коментар до кінця рядка', function () {
+    assertSame(['SELECT 2'], SqlSplitter::split("# x; y\nSELECT 2;"));
+});
+
+test('sql-splitter: /* … ; … */ зникає, оператор не розривається', function () {
+    $result = SqlSplitter::split('SELECT /* ; */ 3;');
+
+    assertSame(1, count($result));
+    assertTrue(!str_contains($result[0], '/*') && !str_contains($result[0], ';'));
+    assertSame(1, preg_match('/^SELECT\s+3$/', $result[0]));
+});
+
+test('sql-splitter: умовний коментар /*!40101 … */ зберігається', function () {
+    assertSame(['/*!40101 SET x = 1 */', 'SELECT 1'], SqlSplitter::split("/*!40101 SET x = 1 */;\nSELECT 1;"));
+});
+
+test('sql-splitter: «--» без пропуску після нього — це вираз, а не коментар', function () {
+    assertSame(['SELECT 5--3'], SqlSplitter::split('SELECT 5--3;'));
+});
+
+test('sql-splitter: лише коментарі і порожні оператори → []', function () {
+    assertSame([], SqlSplitter::split("-- a\n;;  /* b */ ;\n# c"));
+    assertSame([], SqlSplitter::split(''));
+});
+
+test('sql-splitter: DELIMITER не підтримується', function () {
+    assertThrows(fn () => SqlSplitter::split("DELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; END//"), RuntimeException::class);
+    assertThrows(fn () => SqlSplitter::split('delimiter ;;'), RuntimeException::class);
+});
+
+test('sql-splitter: незакритий рядок і блочний коментар → виняток із позицією', function () {
+    $e = assertThrows(fn () => SqlSplitter::split("SELECT 1;\nSELECT 'abc"), RuntimeException::class);
+    assertTrue(str_contains($e->getMessage(), 'line 2'), $e->getMessage());
+    assertThrows(fn () => SqlSplitter::split('SELECT 1 /* x'), RuntimeException::class);
+});
+
+test('sql-splitter: CRLF-вхід дає той самий результат, що й LF', function () {
+    $lf = "-- c\nCREATE TABLE a (\n  id INT\n);\n\nINSERT INTO a VALUES (1);\n";
+
+    assertSame(SqlSplitter::split($lf), SqlSplitter::split(str_replace("\n", "\r\n", $lf)));
+});
+
+// ---------- Domain / Support ----------
+
+test('categories: рівно шість кодів з API.md у фіксованому порядку; перевірка сувора', function () {
+    assertSame(['love', 'money', 'luck', 'work', 'travel', 'mood'], Categories::CODES);
+    assertTrue(Categories::isValid('love'));
+    foreach (['LOVE', 'love ', '', 'x'] as $bad) {
+        assertSame(false, Categories::isValid($bad), "'{$bad}'");
     }
+});
+
+test('languages: коди; column() — білий список для імені колонки', function () {
+    assertSame(['lv', 'en', 'ru'], Languages::CODES);
+    assertSame('text_lv', Languages::column('lv'));
+    assertSame('text_ru', Languages::column('ru'));
+    assertThrows(fn () => Languages::column('lv; DROP TABLE phrases'), InvalidArgumentException::class);
+    assertThrows(fn () => Languages::column('de'), InvalidArgumentException::class);
+});
+
+test('iso8601: DATETIME з БД → ISO 8601 з Z; некоректні значення — виняток', function () {
+    assertSame('2026-10-26T18:30:00Z', Iso8601::fromDb('2026-10-26 18:30:00'));
+    assertThrows(fn () => Iso8601::fromDb('2026-02-31 00:00:00'), InvalidArgumentException::class);
+    assertThrows(fn () => Iso8601::fromDb('abc'), InvalidArgumentException::class);
+});
+
+test('database-guard: лише імена, що закінчуються на _test', function () {
+    foreach (['orakuls_test', 'x_test'] as $ok) {
+        assertSame(true, DatabaseGuard::isTestDatabaseName($ok), $ok);
+    }
+    foreach (['orakuls', '', null, 'test', '_test', 'orakuls_test_x', 'orakuls-test'] as $bad) {
+        assertSame(false, DatabaseGuard::isTestDatabaseName($bad), var_export($bad, true));
+    }
+});
+
+// ---------- Migrator::files / SchemaBuilder ----------
+
+/** Створює тимчасовий каталог із файлами [ім'я => вміст]; видаляється наприкінці прогону. */
+function tempDirWith(array $files): string
+{
+    static $dirs = [];
+    if ($dirs === []) {
+        register_shutdown_function(static function () use (&$dirs): void {
+            foreach ($dirs as $dir) {
+                array_map('unlink', glob($dir . '/*') ?: []);
+                @rmdir($dir);
+            }
+        });
+    }
+
+    $dir = sys_get_temp_dir() . '/orakuls-mig-' . getmypid() . '-' . count($dirs);
+    mkdir($dir);
+    $dirs[] = $dir;
+    foreach ($files as $name => $content) {
+        file_put_contents($dir . '/' . $name, $content);
+    }
+
+    return $dir;
 }
 
-@unlink($testLog);
+test('migrator: files() сортує за іменем', function () {
+    $dir = tempDirWith(['002_b.sql' => 'SELECT 2', '001_a.sql' => 'SELECT 1', '010_c.sql' => 'SELECT 3']);
 
-echo sprintf("\n%d тестів, %d провалено\n", count($tests), $failed);
-exit($failed === 0 ? 0 : 1);
+    assertSame(['001_a.sql', '002_b.sql', '010_c.sql'], Migrator::files($dir));
+});
+
+test('migrator: files() відхиляє некоректні імена', function () {
+    foreach (['1_x.sql', '001-x.sql', '001_X.sql'] as $bad) {
+        $dir = tempDirWith([$bad => 'SELECT 1']);
+        assertThrows(fn () => Migrator::files($dir), RuntimeException::class);
+    }
+});
+
+test('migrator: files() відхиляє однаковий числовий префікс і порожній каталог', function () {
+    $dup = tempDirWith(['002_a.sql' => 'SELECT 1', '002_b.sql' => 'SELECT 2']);
+    assertThrows(fn () => Migrator::files($dup), RuntimeException::class);
+
+    assertThrows(fn () => Migrator::files(tempDirWith([])), RuntimeException::class);
+    assertThrows(fn () => Migrator::files(sys_get_temp_dir() . '/orakuls-no-such-dir'), RuntimeException::class);
+});
+
+test('migrator: read() знімає BOM і нормалізує CRLF', function () {
+    $dir = tempDirWith(['001_a.sql' => "\xEF\xBB\xBFSELECT 1;\r\nSELECT 2;\r\n"]);
+
+    assertSame("SELECT 1;\nSELECT 2;\n", Migrator::read($dir, '001_a.sql'));
+});
+
+test('schema-builder: точний текст для двох міграцій', function () {
+    $dir = tempDirWith([
+        '001_a.sql' => "-- коментар не потрапляє\nCREATE TABLE IF NOT EXISTS a (id INT);\n",
+        '002_b.sql' => "ALTER TABLE a ADD x INT; ALTER TABLE a ADD y INT;\n",
+    ]);
+
+    $expected = "-- Orākuls Coffee · повна схема БД (MySQL 5.7)\n"
+        . "-- ЗГЕНЕРОВАНО командою `php bin/build-schema.php` з database/migrations/*.sql. Вручну не редагувати.\n"
+        . "-- Імпорт: phpMyAdmin → обрати порожню базу → вкладка «Імпорт» → цей файл.\n"
+        . "-- Даних тут немає: сід на прод не потрапляє, фрази завантажує адмін через імпорт.\n"
+        . "\n"
+        . "SET NAMES utf8mb4;\n"
+        . "\n"
+        . Migrator::TABLE_DDL . ";\n"
+        . "\n"
+        . "-- ---- 001_a.sql ----\n"
+        . "CREATE TABLE IF NOT EXISTS a (id INT);\n"
+        . "\n"
+        . "-- ---- 002_b.sql ----\n"
+        . "ALTER TABLE a ADD x INT;\n"
+        . "\n"
+        . "ALTER TABLE a ADD y INT;\n"
+        . "\n"
+        . "INSERT IGNORE INTO `migrations` (`name`, `applied_at`) VALUES\n"
+        . "  ('001_a.sql', UTC_TIMESTAMP()),\n"
+        . "  ('002_b.sql', UTC_TIMESTAMP());\n";
+
+    assertSame($expected, SchemaBuilder::build($dir));
+});
+
+test('schema.sql актуальний: збігається з результатом генерації з міграцій', function () {
+    $saved = str_replace("\r\n", "\n", (string) file_get_contents(APP_ROOT . '/database/schema.sql'));
+
+    assertTrue(
+        SchemaBuilder::build(APP_ROOT . '/database/migrations') === $saved,
+        'schema.sql застарів — запусти: php bin/build-schema.php'
+    );
+});
+
+// ---------- Сід ----------
+
+test('сід: дані завантажуються без БД; ключі унікальні, категорії валідні, довжини ≤ 500 символів', function () {
+    $rows = Seeder::load(APP_ROOT . '/database/seed/phrases.php'); // кидає виняток на будь-яке порушення
+
+    assertSame(30, count($rows));
+    $byKey = array_column($rows, null, 'key');
+    assertSame(30, count($byKey), 'ключі унікальні');
+    assertSame(500, mb_strlen($byKey['len500']['lv']));
+    assertSame(500, mb_strlen($byKey['len500']['en']));
+    assertSame(false, $byKey['hidden']['active']);
+});
+
+// ---------- Запуск ----------
+
+runTests();
