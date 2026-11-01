@@ -57,5 +57,43 @@ check('POST /api/health → 404 not_found', $r['status'] === 404 && (json_decode
 $r = call('GET', "{$base}/api/health/");
 check('GET /api/health/ (слеш у кінці) → 200', $r['status'] === 200, "status={$r['status']}");
 
+// ---------- GET /api/message (лише читання; робоча БД може бути порожньою → 404) ----------
+
+/** 200 з рівно {id, lang, text} і no-store, або 404 not_found — усе інше (зокрема 500, 400) провал. */
+function messageIsOkOrEmpty(array $r): bool
+{
+    $json = json_decode($r['body'], true);
+    if ($r['status'] === 404) {
+        return ($json['error']['code'] ?? '') === 'not_found';
+    }
+
+    return $r['status'] === 200
+        && is_array($json)
+        && array_keys($json) === ['id', 'lang', 'text']
+        && is_int($json['id'])
+        && ($r['headers']['cache-control'] ?? '') === 'no-store';
+}
+
+$r = call('GET', "{$base}/api/message");
+check(
+    'GET /api/message без lang → 400 bad_request, JSON',
+    $r['status'] === 400
+        && (json_decode($r['body'], true)['error']['code'] ?? '') === 'bad_request'
+        && str_starts_with($r['headers']['content-type'] ?? '', 'application/json'),
+    "status={$r['status']} body={$r['body']}"
+);
+
+$r = call('GET', "{$base}/api/message?lang=de");
+check('GET /api/message?lang=de → 400', $r['status'] === 400, "status={$r['status']} body={$r['body']}");
+
+$r = call('GET', "{$base}/api/message?lang=lv");
+check('GET /api/message?lang=lv → 200 {id,lang,text} + no-store або 404 not_found', messageIsOkOrEmpty($r), "status={$r['status']} body={$r['body']}");
+
+$r = call('GET', "{$base}/api/message?lang=lv&exclude=abc,-1,1.5");
+check('GET /api/message з сміттям у exclude → 200/404, але не 400', messageIsOkOrEmpty($r), "status={$r['status']} body={$r['body']}");
+
+$r = call('POST', "{$base}/api/message?lang=lv");
+check('POST /api/message → 404 not_found', $r['status'] === 404 && (json_decode($r['body'], true)['error']['code'] ?? '') === 'not_found', "status={$r['status']}");
+
 echo $failed === 0 ? "\nвсе гаразд\n" : "\nпровалено: {$failed}\n";
 exit($failed === 0 ? 0 : 1);

@@ -17,6 +17,7 @@ use App\Http\Response;
 use App\Http\Router;
 use App\Support\ApiException;
 use App\Support\Config;
+use App\Support\IdList;
 use App\Support\Iso8601;
 use App\Support\Json;
 
@@ -470,6 +471,87 @@ test('сід: дані завантажуються без БД; ключі ун
     assertSame(500, mb_strlen($byKey['len500']['lv']));
     assertSame(500, mb_strlen($byKey['len500']['en']));
     assertSame(false, $byKey['hidden']['active']);
+});
+
+// ---------- BE-003: IdList, Request::rawQuery, маршрут /api/message ----------
+
+test('IdList::parse: таблиця «вхід → результат»', function () {
+    $cases = [
+        'null' => [null, []],
+        'порожній рядок' => ['', []],
+        'одне число' => ['5', [5]],
+        'список' => ['5,12,40', [5, 12, 40]],
+        'пробіли навколо чисел' => [' 5 , 12 ', [5, 12]],
+        'сміття між числами' => ['5,abc,40', [5, 40]],
+        'порожній елемент' => ['1,,2', [1, 2]],
+        'самі коми' => [',,,', []],
+        'від\'ємне' => ['-5', []],
+        'плюс' => ['+5', []],
+        'дробове' => ['1.5', []],
+        'експонента' => ['1e3', []],
+        '11 цифр' => ['12345678901', []],
+        '10 цифр, max INT UNSIGNED' => ['4294967295', [4294967295]],
+        'нулі на початку' => ['007', [7]],
+        'нуль' => ['0', [0]],
+        'повтори' => ['5,5,6,5', [5, 6]],
+        'арабсько-індійська цифра' => ['٣', []],
+        'сміття не займає місце' => ['abc,x,7', [7]],
+        'число з пробілом всередині' => ['1 2', []],
+        'перенос рядка навколо числа' => ["\n5\t", [5]],
+    ];
+
+    foreach ($cases as $name => [$input, $expected]) {
+        assertSame($expected, IdList::parse($input), $name);
+    }
+});
+
+test('IdList::parse: враховує лише перші 200 коректних ID; max задається параметром', function () {
+    $ids = range(1, 300);
+    $result = IdList::parse(implode(',', $ids));
+
+    assertSame(200, count($result));
+    assertSame(range(1, 200), $result, 'перші 200 у порядку появи');
+    assertSame(IdList::MAX_IDS, 200);
+    assertSame([1, 2, 3], IdList::parse('1,2,3,4,5', 3));
+});
+
+test('IdList::parse: 1500 коректних ID в одному рядку і рядок на 1 МБ сміття не кидають винятків', function () {
+    $many = IdList::parse(implode(',', range(1, 1500)));
+    assertTrue(count($many) <= 200, 'довжина ' . count($many));
+    assertSame(range(1, 200), $many);
+
+    assertSame([], IdList::parse(str_repeat('a,', 524288))); // 1 МБ
+    // Коректні ID далеко за межею розглянутих фрагментів — не потрапляють, але й помилки немає
+    assertSame([], IdList::parse(str_repeat('a,', 2000) . '7'));
+});
+
+test('Request::rawQuery: повертає рядок, масив і null як є; query() на масив кидає 400', function () {
+    $request = new Request('GET', '/x', ['a' => 'text', 'b' => ['1', '2'], 'c' => '']);
+
+    assertSame('text', $request->rawQuery('a'));
+    assertSame(['1', '2'], $request->rawQuery('b'));
+    assertSame('', $request->rawQuery('c'));
+    assertSame(null, $request->rawQuery('missing'));
+
+    $e = assertThrows(fn () => $request->query('b'), ApiException::class);
+    assertSame(400, $e->status);
+});
+
+test('маршрут GET /api/message зареєстрований; lang перевіряється до звернення до БД (400 без БД)', function () {
+    foreach ([[], ['lang' => ''], ['lang' => 'de'], ['lang' => 'LV'], ['lang' => 'lv '], ['lang' => ['lv']]] as $query) {
+        $response = apiRequest('GET', '/api/message', $query);
+
+        assertSame(400, $response->status, json_encode($query));
+        assertSame('bad_request', decode($response)['error']['code']);
+        assertSame(['code', 'message'], array_keys(decode($response)['error']), 'без fields');
+    }
+
+    // Інші методи — 404, а не 405 і не 200
+    foreach (['POST', 'PUT', 'DELETE'] as $method) {
+        $response = apiRequest($method, '/api/message', ['lang' => 'lv']);
+        assertSame(404, $response->status, $method);
+        assertSame('not_found', decode($response)['error']['code']);
+    }
 });
 
 // ---------- Запуск ----------
