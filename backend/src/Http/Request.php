@@ -57,6 +57,15 @@ final class Request
     }
 
     /**
+     * Сире значення параметра без перевірок: рядок, масив або null.
+     * Для параметрів-підказок (exclude), де некоректний ввід має ігноруватись, а не давати 400.
+     */
+    public function rawQuery(string $name): mixed
+    {
+        return $this->query[$name] ?? null;
+    }
+
+    /**
      * Тіло запиту як JSON-об'єкт. Порожнє тіло, не-JSON і не-об'єкт (число, рядок, список) → 400.
      *
      * @return array<string, mixed>
