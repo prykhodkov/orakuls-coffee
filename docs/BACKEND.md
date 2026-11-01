@@ -41,7 +41,8 @@ backend/
     routes.php            — реєстрація маршрутів
     Http/                 — Request, Response, Router, Kernel, ErrorHandler
     Controller/           — обробники ендпоінтів
-    Support/              — Config, Db, Json, Logger, ApiException, Iso8601
+    Repository/           — SQL-запити до таблиць (PhraseRepository)
+    Support/              — Config, Db, Json, Logger, ApiException, Iso8601, IdList
     Domain/               — Categories, Languages (єдині списки кодів)
     Database/             — Migrator, SqlSplitter, SchemaBuilder, Seeder, DatabaseGuard
   bin/                    — CLI: migrate.php, seed.php, build-schema.php
@@ -105,6 +106,7 @@ API_PROXY_TARGET=http://localhost:8000
 - **Помилки.** Усі відповіді з помилкою — `{ "error": { "code", "message", "fields?" } }`. Необроблений виняток і PHP warning → `500 server_error` без stack trace, деталі — у лог. Deprecated-повідомлення PHP лише логуються й запит не ламають.
 - **Логи — лише стандартний `error_log()`**, власних файлів логів застосунок не веде (клієнт хостинг не обслуговує, файл без ротації з часом переповнив би квоту). Куди потрапляє лог, визначає конфігурація PHP: у Docker — stderr (`docker compose logs php`), на хостингу — те, що налаштовано в BE-009. Пишемо лише несподівані події (500, падіння БД у health), тож обсяг малий.
 - **Невідомий шлях і непідтримуваний метод** на існуючий шлях → `404 not_found` (коду 405 у контракті немає).
+- **`GET /api/message`: `exclude` — підказка, а не вимога.** Нечислові, порожні, від'ємні, дробові й задовгі (понад 10 цифр) елементи мовчки пропускаються, повтори прибираються, враховуються перші 200 коректних ID, решта ігнорується; `exclude[]=…` трактується як відсутній. `400` на цьому ендпоінті дає лише `lang` (відсутній, порожній, невідомий, не в нижньому регістрі, масив). Спершу вибираються фрази поза `exclude`; якщо інших немає — повертається будь-яка доступна (`404` лише коли доступних фраз для мови немає взагалі). Відповідь `200` має рівно `id` (число), `lang`, `text` і `Cache-Control: no-store`.
 - **Слеш у кінці шляху** ігнорується (`/api/health/` = `/api/health`).
 - **Порожнє тіло, не-JSON, не-об'єкт** (число, рядок, список) там, де очікується JSON → `400 bad_request`.
 - **Типи в JSON.** Числа числами (нативні prepared statements, `STRINGIFY_FETCHES=false`), порожні асоціативні масиви → `{}` через `Json::object()`. Кирилиця й латиська не екрануються.

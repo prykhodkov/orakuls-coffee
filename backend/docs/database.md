@@ -31,7 +31,8 @@ MySQL **5.7** (версія хостингу GoDaddy). Локально — `mys
 - У `LIKE` спецсимволи `%`, `_`, `\` з вводу екрануються.
 - Довжину рядків рахуємо в **символах** (`mb_strlen`), а не в байтах: ліміт 500 символів — це не 500 байт.
 - Не використовуємо можливості MySQL 8.0: CTE (`WITH`), віконні функції, `utf8mb4_0900_*`, `ADD COLUMN … INSTANT`, `JSON_TABLE`.
-- Випадковий вибір — `ORDER BY RAND() LIMIT 1`: на ~600 фразах це швидко.
+- Випадковий вибір — `ORDER BY RAND() LIMIT 1`: на ~600 фразах це швидко. Шаблон з виключеннями — у розділі «Порожній переклад і випадкова фраза».
+- SQL до `phrases` живе в `Repository\PhraseRepository` ([D-17](decisions.md)), не в контролерах.
 - Результати агрегатів (`COUNT`, `SUM`) приводимо до `(int)` у коді, бо MySQL може віддати `SUM` як `DECIMAL`-рядок.
 
 ## Дати
@@ -58,7 +59,7 @@ MySQL **5.7** (версія хостингу GoDaddy). Локально — `mys
 | `is_active` | `TINYINT(1) NOT NULL DEFAULT 1` | |
 | `created_at`, `updated_at` | `DATETIME NOT NULL`, **без** `DEFAULT` | UTC; код передає `UTC_TIMESTAMP()` |
 
-Індекси: `idx_phrases_category`, `idx_phrases_is_active`. Аналіз `EXPLAIN` конкретних запитів виконують BE-003 і BE-005.
+Індекси: `idx_phrases_category`, `idx_phrases_is_active`. `EXPLAIN` запиту `GET /api/message` (BE-003): `type: ALL`, `Using where; Using temporary; Using filesort` — `ORDER BY RAND()` однаково проходить усіх кандидатів, індекс тут не допомагає; на ~600 фразах це ≈1 мс. Аналіз запитів BE-005 — у тій задачі.
 
 **Типи з БД.** Нативні prepared statements повертають `id` і `is_active` як `int` (не рядок і не `bool`), `DATETIME` — як рядок `'2026-10-26 18:30:00'`. У JSON `isActive` треба явно приводити `(bool)`, дату — через `Iso8601::fromDb()`; це робить серіалізатор фрази (BE-005). Регресію типів фіксує `tests/api/database.php`.
 
@@ -89,6 +90,29 @@ MySQL **5.7** (версія хостингу GoDaddy). Локально — `mys
 | `Support\Iso8601` | Перетворення дат БД на ISO 8601 (див. «Дати») |
 
 Нова категорія додається лише в `Categories::CODES`; міграція не потрібна.
+
+### Порожній переклад і випадкова фраза
+
+**Порожній переклад** = `TRIM(колонка) = ''` у SQL. Умову «переклад є» дає `PhraseRepository::hasTextSql($lang)` (`` TRIM(`text_lv`) <> '' ``) — єдине визначення для `GET /api/message` (BE-003), фільтра `missing` (BE-005) і статистики (BE-008); власних версій умови не писати. `TRIM` у MySQL прибирає **лише пробіли** (рядок із табуляцій чи переносів не вважається порожнім), а `trim()` у PHP — усі пробільні символи. BE-006 при записі обрізає по-PHP-шному, тож розбіжність можлива лише для застарілих або внесених вручну даних.
+
+**Випадкова фраза** (`PhraseRepository::findRandom()`, [D-19](decisions.md)):
+
+```sql
+-- без exclude
+SELECT `id`, `text_lv` AS `text` FROM `phrases`
+ WHERE `is_active` = 1 AND TRIM(`text_lv`) <> ''
+ ORDER BY RAND() LIMIT 1
+
+-- з exclude (по одному ? на кожен ID, PDO::PARAM_INT)
+SELECT `id`, `text_lv` AS `text` FROM `phrases`
+ WHERE `is_active` = 1 AND TRIM(`text_lv`) <> ''
+ ORDER BY (`id` IN (?, ?, …)) ASC, RAND() LIMIT 1
+```
+
+- `(id IN (…))` дає `0` для непереглянутих і `1` для виключених: спершу перемішуються непереглянуті, виключені йдуть лише коли інших немає — запасний варіант «ігнорувати `exclude`» не потребує другого запиту.
+- **При порожньому списку `IN` не додається взагалі**: `IN ()` у MySQL — синтаксична помилка (1064).
+- Ім'я колонки — лише з `Languages::column()`, ID — лише параметрами.
+- Вартість: на 600 фразах із 100 виключеними ≈1 мс (тест `tests/api/message.php` вимагає медіану < 200 мс і перевіряє, що сервер БД віддає один рядок, а не таблицю).
 
 ### Категорії не захищені на рівні БД
 
