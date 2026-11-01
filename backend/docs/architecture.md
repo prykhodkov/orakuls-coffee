@@ -64,11 +64,11 @@ backend/
 | `Controller\*` | Обробники ендпоінтів: `fn(Request, array $params): Response`. Контролер тонкий: розбирає ввід, викликає репозиторій, формує відповідь |
 | `Controller\MessageController` | `GET /api/message`: перевіряє `lang`, розбирає `exclude`, повертає випадкове послання (BE-003) |
 | `Controller\AuthController` | `POST /api/admin/auth/login` (порядок: конфігурація → 400 → 422 → 429 → 401/200) і `GET /api/admin/auth/me`; токен не перевіряє — це робить guard (BE-004) |
-| `Controller\PhraseController` | `GET /api/admin/phrases` і `GET /api/admin/phrases/{id}` (BE-005): `parseFilter()` суворо розбирає параметри до звернення до БД (D-25), `index`/`show` викликають `PhraseRepository` і віддають `Phrase::toArray()` з `no-store`. `POST /api/admin/phrases` (`create`, `201`), `PUT /api/admin/phrases/{id}` (`update`, `200`), `DELETE /api/admin/phrases/{id}` (`delete`, `204`) (BE-006): порядок перевірок id → тіло → `PhraseValidator` → БД (D-29); формат `id` розбирає спільний `parseId()` |
+| `Controller\PhraseController` | `GET /api/admin/phrases` і `GET /api/admin/phrases/{id}` (BE-005): `parseFilter()` суворо розбирає параметри до звернення до БД (D-25), `index`/`show` викликають `PhraseRepository` і віддають `Phrase::toArray()` з `no-store`. `POST /api/admin/phrases` (`create`, `201`), `PUT /api/admin/phrases/{id}` (`update`, `200`), `DELETE /api/admin/phrases/{id}` (`delete`, `204`) (BE-006): порядок перевірок id → тіло → `PhraseValidator` → БД (D-29); формат `id` розбирає спільний `parseId()`. `POST /api/admin/phrases/import` (`import`, `200`, BE-007): тіло → `items` → валідація всіх елементів у пам'яті → один виклик `createMany()` (D-31) |
 | `Auth\AuthConfig` | Читає `ADMIN_LOGIN`, `ADMIN_PASSWORD_HASH`, `TOKEN_SECRET`, `TOKEN_TTL_HOURS`; некоректна конфігурація → лог (лише назва змінної) і `500` (fail-closed) |
 | `Auth\TokenService` | Випуск і сувора перевірка JWT HS256 без бібліотек (D-21); «поточний час» приходить параметром |
 | `Auth\LoginRateLimiter` | Ліміт невдалих спроб входу за IP на таблиці `login_attempts` (D-22) |
-| `Repository\PhraseRepository` | Єдине місце SQL до `phrases` (D-17): `findRandom()`, `search()` (сторінка + `COUNT(*)` з одним `WHERE`, D-26), `find()`, `create()`/`update()`/`delete()` (BE-006, D-29: 2/2/1 запит), `hasTextSql()`/`lacksTextSql()`, `escapeLike()` (D-24). Отримує `PDO` ззовні |
+| `Repository\PhraseRepository` | Єдине місце SQL до `phrases` (D-17): `findRandom()`, `search()` (сторінка + `COUNT(*)` з одним `WHERE`, D-26), `find()`, `create()`/`update()`/`delete()` (BE-006, D-29: 2/2/1 запит), `createMany()` (BE-007, D-31: одна транзакція, пакети по 100 рядків), `hasTextSql()`/`lacksTextSql()`, `escapeLike()` (D-24). Отримує `PDO` ззовні |
 | `Support\ApiException` | Очікувана помилка API (статус + код + повідомлення + `fields` + додаткові заголовки, напр. `Retry-After`) |
 | `Support\Config` | `.env` + змінні процесу |
 | `Support\Db` | Ліниве PDO-з'єднання з уніфікованими налаштуваннями сесії |
@@ -81,7 +81,7 @@ backend/
 | `Domain\Phrase` | Незмінна фраза API: `fromRow()` (рядок БД → `int`, `bool`, ISO 8601, `text` з ключами `lv`, `en`, `ru`) і `toArray()` у порядку `API.md`; єдине відображення для BE-005 … BE-007 (D-26) |
 | `Domain\PhraseFilter` | Параметри списку фраз (`category`, `search`, `missing`, `isActive`, `page`, `perPage`) і `offset()`; чисті дані |
 | `Domain\PhraseInput` | Нормалізовані дані для запису фрази (`category`, `text` trimmed, `isActive`); чисті дані (BE-006) |
-| `Domain\PhraseValidator` | `validate(array)` → `PhraseInput` або **всі** помилки полів (`required`/`invalid`/`too_long`/`empty`), винятків не кидає; `trim()` — юнікодний trim як у JS. Використовують `POST`/`PUT` і (BE-007) імпорт (D-27, D-28) |
+| `Domain\PhraseValidator` | `validate(array)` → `PhraseInput` або **всі** помилки полів (`required` лише для `category` і `text`; `invalid`/`too_long`/`empty`), винятків не кидає; відсутній ключ мови і `null` — порожній переклад (D-30); `trim()` — юнікодний trim як у JS. Використовують `POST`/`PUT` і (BE-007) імпорт (D-27, D-28, D-30) |
 | `Database\Migrator` | Застосовує міграції по одному оператору, веде таблицю `migrations` |
 | `Database\SqlSplitter` | Розбиває SQL-файл на оператори (D-15) |
 | `Database\SchemaBuilder` | Збирає `schema.sql` з міграцій (D-16) |
@@ -126,7 +126,6 @@ Apache / php -S
 
 | Компонент | Задача |
 |-----------|--------|
-| Масовий імпорт фраз (використає `PhraseValidator`) | BE-007 |
 | `StatsController` | BE-008 |
 | `.htaccess`, точка входу для хостингу | BE-009 |
 

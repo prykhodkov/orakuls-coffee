@@ -192,6 +192,25 @@ DELETE FROM `phrases` WHERE `id` = ?
 - Транзакцій і `SELECT … FOR UPDATE` немає: адмін один.
 - `id` після `DELETE` InnoDB (5.7) після перезапуску сервера може віддати знову (`AUTO_INCREMENT` обчислюється як `MAX(id) + 1`); для цього проєкту наслідок мізерний.
 
+### Масова вставка (BE-007)
+
+`PhraseRepository::createMany(list<PhraseInput>): int` ([D-31](decisions.md)). Усі значення — параметри, імена колонок — з `Languages::column()`. Метод сам керує транзакцією: усе або нічого.
+
+```sql
+START TRANSACTION;                                            -- PDO::beginTransaction()
+-- на кожні 100 рядків (array_chunk, INSERT_BATCH) — окремий prepared INSERT на N рядків:
+INSERT INTO `phrases` (`category`, `text_lv`, `text_en`, `text_ru`, `is_active`, `created_at`, `updated_at`)
+VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP()),     -- category, 3 тексти (PARAM_STR), is_active (PARAM_INT 1/0)
+       (?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP()),
+       …                                                       -- до 100 рядків = до 500 плейсхолдерів
+COMMIT;                                                       -- PDO::commit(); будь-який Throwable → ROLLBACK і той самий виняток
+```
+
+- **Відкат:** збій будь-якого пакета (у тесті — тригер `BEFORE INSERT … SIGNAL SQLSTATE '45000'` на значенні `text_en = 'BOOM'`) → `ROLLBACK`, у таблиці жодного нового рядка, навіть із вже виконаних пакетів; виняток іде далі, `ErrorHandler` віддає `500`.
+- **Запити:** `ceil(valid / 100)` вставок (250 → 3, 100 → 1, 101 → 2, 1000 → 10); `START TRANSACTION`/`COMMIT` `Com_stmt_execute` не рахує (`statementCount()` їх не бачить, а лічильники `Com_begin`/`Com_commit`/`Com_rollback` — бачать). Порожній список → `0` без запитів і без транзакції.
+- `created_at` і `updated_at` у пакеті від одного `UTC_TIMESTAMP()` (збігаються); `lastInsertId()` не використовується: id створених фраз не повертаються, порядок записів = порядок у запиті.
+- Швидкодія: 1000 найдовших фраз (3 × 500 чотирибайтних символів) — 10 пакетів, ≈ 100 мс.
+
 ### Категорії не захищені на рівні БД
 
 `category` — звичайний `VARCHAR(16)`, а не `ENUM` (D-11): нова категорія не потребує міграції. Допустимі коди (`love`, `money`, `luck`, `work`, `travel`, `mood`) перевіряє код — з одного списку, який використовують валідація й фільтри. На `CHECK` у БД покладатися не можна: **MySQL 5.7 приймає `CHECK`, але ігнорує його**. Тому будь-який шлях запису у `phrases` (створення, оновлення, імпорт) мусить перевіряти категорію в коді.
