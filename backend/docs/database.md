@@ -118,7 +118,7 @@ INSERT INTO login_attempts (ip, attempted_at) VALUES (?, UTC_TIMESTAMP())
 
 ### Порожній переклад і випадкова фраза
 
-**Порожній переклад** = `TRIM(колонка) = ''` у SQL. Умову «переклад є» дає `PhraseRepository::hasTextSql($lang)` (`` TRIM(`text_lv`) <> '' ``), а протилежну «перекладу немає» — `PhraseRepository::lacksTextSql($lang)` (`` TRIM(`text_lv`) = '' ``) — поряд, щоб визначення порожнього було єдиним для `GET /api/message` (BE-003), фільтра `missing` (BE-005) і статистики (BE-008); власних версій умови не писати. `TRIM` у MySQL прибирає **лише пробіли** (рядок із табуляцій чи переносів не вважається порожнім), а `trim()` у PHP — усі пробільні символи. BE-006 при записі обрізає по-PHP-шному, тож розбіжність можлива лише для застарілих або внесених вручну даних.
+**Порожній переклад** = `TRIM(колонка) = ''` у SQL. Умову «переклад є» дає `PhraseRepository::hasTextSql($lang)` (`` TRIM(`text_lv`) <> '' ``), а протилежну «перекладу немає» — `PhraseRepository::lacksTextSql($lang)` (`` TRIM(`text_lv`) = '' ``) — поряд, щоб визначення порожнього було єдиним для `GET /api/message` (BE-003), фільтра `missing` (BE-005) і статистики (BE-008); власних версій умови не писати. `TRIM` у MySQL прибирає **лише пробіли** (рядок із табуляцій чи переносів не вважається порожнім), а `trim()` у PHP — усі пробільні символи. BE-006 при записі обрізає по-юнікодному, як JS `trim()` (`PhraseValidator::trim()`, [D-27](decisions.md)): прибирає й табуляції та переноси, і нерозривний пробіл. Розбіжність із SQL-`TRIM` можлива лише для застарілих або внесених вручну даних.
 
 **Випадкова фраза** (`PhraseRepository::findRandom()`, [D-19](decisions.md)):
 
@@ -166,6 +166,31 @@ SELECT COUNT(*) FROM `phrases` WHERE …                   -- ті самі ум
 - `COUNT(*)` повертається як `(int)`; `items` — завжди список (`array_values`).
 - Сторінка за межами діапазону — звичайний запит, що повертає `[]` без помилки (`page=999999999` перевіряє тест, `OFFSET` порядку 5·10¹⁰ вміщується в 64-бітний `int`); `SQL_CALC_FOUND_ROWS` не використовується.
 - `find($id)`: `SELECT <ті самі колонки> FROM phrases WHERE id = ?` (`PARAM_INT`) → `Phrase` або `null`.
+
+### Запис фраз (BE-006)
+
+`PhraseRepository::create()`, `update()`, `delete()` ([D-29](decisions.md)). Усі значення — лише параметри (`bindValue`), імена колонок текстів — з `Languages::column()`. Дані до репозиторію приходять уже нормалізованими (`PhraseInput` від `PhraseValidator`, [D-27](decisions.md)).
+
+```sql
+-- create: 2 запити (INSERT + find). created_at і updated_at — два UTC_TIMESTAMP() в одному операторі, тож збігаються
+INSERT INTO `phrases` (`category`, `text_lv`, `text_en`, `text_ru`, `is_active`, `created_at`, `updated_at`)
+VALUES (?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())      -- is_active: PARAM_INT 1/0; id = lastInsertId()
+
+-- update: 2 запити (UPDATE + find). created_at не чіпається
+UPDATE `phrases`
+   SET `category` = ?, `text_lv` = ?, `text_en` = ?, `text_ru` = ?, `is_active` = ?, `updated_at` = UTC_TIMESTAMP()
+ WHERE `id` = ?
+
+-- delete: 1 запит
+DELETE FROM `phrases` WHERE `id` = ?
+```
+
+- Відповідь `create`/`update` — `find($id)` після запису, тож тип і формат полів ті самі, що й у читанні (D-26).
+- **`update()` не спирається на `rowCount()`**: `UPDATE`, що не змінив жодного значення (ті самі дані в ту ж секунду, `updated_at` теж збігся), повертає `0` — так само, як і для неіснуючого `id`. Тому після `UPDATE` робиться `find($id)`: `null` означає, що фрази немає. `delete()` повертає `rowCount() > 0` — для `DELETE` це реальна кількість видалених.
+- Текст пишеться як є: без екранування HTML, без нормалізації `
+`; довжина ≤ 500 символів гарантується валідатором (інакше БД відхилила б запис помилкою `1406`, див. «Схема»).
+- Транзакцій і `SELECT … FOR UPDATE` немає: адмін один.
+- `id` після `DELETE` InnoDB (5.7) після перезапуску сервера може віддати знову (`AUTO_INCREMENT` обчислюється як `MAX(id) + 1`); для цього проєкту наслідок мізерний.
 
 ### Категорії не захищені на рівні БД
 

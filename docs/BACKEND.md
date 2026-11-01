@@ -44,7 +44,7 @@ backend/
     Auth/                 — AuthConfig, TokenService, LoginRateLimiter (токен адміна, ліміт спроб)
     Repository/           — SQL-запити до таблиць (PhraseRepository)
     Support/              — Config, Db, Json, Logger, ApiException, Iso8601, IdList
-    Domain/               — Categories, Languages (єдині списки кодів)
+    Domain/               — Categories, Languages (єдині списки кодів), Phrase, PhraseFilter, PhraseInput, PhraseValidator
     Database/             — Migrator, SqlSplitter, SchemaBuilder, Seeder, DatabaseGuard
   bin/                    — CLI: migrate.php, seed.php, build-schema.php, hash-password.php
   database/               — migrations/*.sql, schema.sql (генерується), seed/phrases.php (лише тест)
@@ -130,6 +130,27 @@ API_PROXY_TARGET=http://localhost:8000
 - Усі відповіді (і помилки) мають `Cache-Control: no-store`; в `isActive` — `true`/`false`, у `text` завжди три ключі (порожній переклад — `""`), дати — ISO 8601 UTC.
 
 Рішення — [D-24 … D-26](../backend/docs/decisions.md), правила в коді — [backend/docs/api-conventions.md](../backend/docs/api-conventions.md).
+
+## Створення, оновлення і видалення фраз (BE-006)
+
+Контракт — [API.md](API.md) → `POST /api/admin/phrases`, `PUT` і `DELETE /api/admin/phrases/{id}`; потрібен `Authorization: Bearer <token>`. Ендпоінти готові:
+
+| Ендпоінт | Успіх | Статус |
+|----------|-------|--------|
+| `POST /api/admin/phrases` | `201` + `Phrase` | готово |
+| `PUT /api/admin/phrases/{id}` | `200` + `Phrase` (повна заміна) | готово |
+| `DELETE /api/admin/phrases/{id}` | `204` без тіла | готово |
+
+Що має знати фронт:
+
+- **Тіло:** `{ category, text: { lv, en, ru }, isActive }`. `isActive` необов'язковий і за замовчуванням `true` (і в `PUT` теж — це повна заміна). **Зайві поля** (`id`, `createdAt`, `text.de`) ігноруються, тож можна слати назад усю отриману фразу.
+- **`422 validation_error`** із `fields` — усі помилки разом, ключі й коди такі, як очікує `phrase-dialog.js`: `category` (`required`, `invalid`), `text` (`required`, `invalid`, `empty` — усі три мови порожні), `text.lv|en|ru` (`required`, `invalid`, `too_long`), `isActive` (`invalid`). Таблиця — [backend/docs/api-conventions.md](../backend/docs/api-conventions.md).
+- **Текст.** Бекенд сам обрізає пробіли по краях так само, як JS `trim()` (включно з нерозривним пробілом `U+00A0`, `U+3000`, `U+FEFF`). Максимум 500 **символів** після обрізання (емодзі = 1; лічильник фронта рахує UTF-16-одиниці, тож він суворіший — це безпечно). Довший текст — `422 too_long`, не обрізається мовчки. Порожній переклад (`""`) дозволений, якщо хоч одна мова непорожня. `\n`, `\r\n`, `\t` зберігаються; **керівні символи** (`\0`, `\x01`…`\x1F`, крім `\t \n \r`, і `\x7F`) → `422`, `text.xx = invalid`. HTML не змінюється.
+- **Порядок помилок:** `PUT`/`DELETE` з неканонічним `id` (`007`, `abc`) — `404`; `PUT` з не-JSON тілом — `400`; невалідні поля — `422` (навіть для неіснуючого `id`); валідне тіло для неіснуючого `id` — `404`.
+- `createdAt` не змінюється при `PUT`, `updatedAt` оновлюється. Усі відповіді (і `204`, і помилки) мають `Cache-Control: no-store`.
+- Відповідь `201`/`200` містить актуальну `Phrase` з БД; після збереження фронт, як і раніше, сам перезапитує список.
+
+Рішення — [D-27 … D-29](../backend/docs/decisions.md).
 
 ## Службовий ендпоінт `GET /api/health`
 
