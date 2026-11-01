@@ -5,7 +5,10 @@ declare(strict_types=1);
 namespace App\Repository;
 
 use App\Domain\Languages;
+use App\Domain\Phrase;
+use App\Domain\PhraseFilter;
 use PDO;
+use PDOStatement;
 
 /**
  * Запити до таблиці phrases. SQL живе тут, а не в контролерах (D-17): ним користуватимуться
@@ -13,6 +16,12 @@ use PDO;
  */
 final class PhraseRepository
 {
+    /** Колонки, з яких Phrase::fromRow будує фразу. */
+    private const COLUMNS = '`id`, `category`, `text_lv`, `text_en`, `text_ru`, `is_active`, `created_at`, `updated_at`';
+
+    /** Службовий символ x02 замість % у пошуку, що починається з % (обхід вади LIKE у MySQL 5.7, див. buildWhere). */
+    private const PERCENT_STAND_IN = "\x02";
+
     public function __construct(private readonly PDO $pdo)
     {
     }
@@ -26,6 +35,130 @@ final class PhraseRepository
     public static function hasTextSql(string $lang): string
     {
         return 'TRIM(`' . Languages::column($lang) . '`) <> \'\'';
+    }
+
+    /**
+     * SQL-умова «переклад мовою $lang порожній». Поряд із hasTextSql: єдине визначення порожнього для всіх ендпоінтів.
+     */
+    public static function lacksTextSql(string $lang): string
+    {
+        return 'TRIM(`' . Languages::column($lang) . '`) = \'\'';
+    }
+
+    /**
+     * Готує підрядок для LIKE ... ESCAPE x'01'. Службовий символ вилучається з вводу (його не можна набрати,
+     * тож він не може бути шуканим), а % і _ екрануються ним. Зворотний слеш і решта символів лишаються звичайними.
+     * Чому не ESCAPE '\' (пошук одного такого символа на MySQL 5.7 нічого не знаходить) — див. D-24.
+     */
+    public static function escapeLike(string $needle): string
+    {
+        $needle = str_replace("\x01", '', $needle);
+
+        return strtr($needle, ['%' => "\x01%", '_' => "\x01_"]);
+    }
+
+    /**
+     * Сторінка фраз за фільтром і загальна кількість після фільтрів. Рівно два запити (вибірка + COUNT)
+     * з одним і тим самим WHERE, тож total завжди відповідає фільтрам. Сортування: id за спаданням.
+     *
+     * @return array{items: list<Phrase>, total: int}
+     */
+    public function search(PhraseFilter $filter): array
+    {
+        [$where, $binds] = $this->buildWhere($filter);
+
+        $stmt = $this->pdo->prepare(
+            'SELECT ' . self::COLUMNS . ' FROM `phrases`' . $where . ' ORDER BY `id` DESC LIMIT ? OFFSET ?'
+        );
+        $binds[] = [$filter->perPage, PDO::PARAM_INT];
+        $binds[] = [$filter->offset(), PDO::PARAM_INT];
+        $this->bindAll($stmt, $binds);
+        $stmt->execute();
+        $items = array_map(
+            static fn (array $row): Phrase => Phrase::fromRow($row),
+            array_values($stmt->fetchAll())
+        );
+
+        // Ті самі параметри WHERE, але без LIMIT і OFFSET (два останні елементи)
+        $count = $this->pdo->prepare('SELECT COUNT(*) FROM `phrases`' . $where);
+        $this->bindAll($count, array_slice($binds, 0, -2));
+        $count->execute();
+
+        return ['items' => $items, 'total' => (int) $count->fetchColumn()];
+    }
+
+    public function find(int $id): ?Phrase
+    {
+        $stmt = $this->pdo->prepare('SELECT ' . self::COLUMNS . ' FROM `phrases` WHERE `id` = ?');
+        $stmt->bindValue(1, $id, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $row = $stmt->fetch();
+
+        return $row === false ? null : Phrase::fromRow($row);
+    }
+
+    /**
+     * Єдине місце побудови WHERE для списку: ним користуються і вибірка сторінки, і COUNT(*).
+     * Ввід користувача потрапляє лише в параметри; імена колонок беруться з Languages::column().
+     *
+     * @return array{0: string, 1: list<array{0: mixed, 1: int}>} SQL (із пробілом попереду або порожній) і параметри
+     */
+    private function buildWhere(PhraseFilter $filter): array
+    {
+        $conditions = [];
+        $binds = [];
+
+        if ($filter->category !== null) {
+            $conditions[] = '`category` = ?';
+            $binds[] = [$filter->category, PDO::PARAM_STR];
+        }
+        if ($filter->isActive !== null) {
+            $conditions[] = '`is_active` = ?';
+            $binds[] = [$filter->isActive ? 1 : 0, PDO::PARAM_INT];
+        }
+        if ($filter->missing !== null) {
+            $conditions[] = self::lacksTextSql($filter->missing);
+        }
+        if ($filter->search !== null) {
+            $needle = $filter->search;
+
+            // Вада MySQL 5.7 (utf8mb4_unicode_ci): екранований % одразу після початкового % шаблону трактується як
+            // шаблонний символ, тож пошук «%…» дає хибні збіги («%_» знаходив би все, де є % і далі _). Для таких
+            // вводів % у запиті й у колонці замінюється службовим символом x02 (див. D-24); для решти вводів
+            // колонка порівнюється як є.
+            $viaReplace = str_starts_with($needle, '%');
+            if ($viaReplace) {
+                $needle = str_replace('%', self::PERCENT_STAND_IN, str_replace(self::PERCENT_STAND_IN, '', $needle));
+            }
+
+            $pattern = '%' . self::escapeLike($needle) . '%';
+            $likes = [];
+            foreach (Languages::CODES as $lang) {
+                $column = '`' . Languages::column($lang) . '`';
+                if ($viaReplace) {
+                    $column = "REPLACE({$column}, '%', _utf8mb4 x'02')";
+                }
+                // Подвійні лапки: x'01' без підстановок змінних; керівного символа в коді немає
+                $likes[] = $column . " LIKE ? ESCAPE x'01'";
+                $binds[] = [$pattern, PDO::PARAM_STR];
+            }
+            $conditions[] = '(' . implode(' OR ', $likes) . ')';
+        }
+
+        return [$conditions === [] ? '' : ' WHERE ' . implode(' AND ', $conditions), $binds];
+    }
+
+    /**
+     * Позиційні параметри нумеруються з 1 наскрізно по всьому запиту.
+     *
+     * @param list<array{0: mixed, 1: int}> $binds
+     */
+    private function bindAll(PDOStatement $stmt, array $binds): void
+    {
+        foreach ($binds as $i => [$value, $type]) {
+            $stmt->bindValue($i + 1, $value, $type);
+        }
     }
 
     /**
