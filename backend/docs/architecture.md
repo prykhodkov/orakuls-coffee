@@ -30,11 +30,11 @@ backend/
     bootstrap.php           автозавантаження, .env, UTC, обробники помилок
     routes.php              реєстрація маршрутів
     Http/                   Request, Response, Router, Kernel, ErrorHandler, AdminGuard
-    Controller/             обробники ендпоінтів (HealthController, MessageController, AuthController)
+    Controller/             обробники ендпоінтів (HealthController, MessageController, AuthController, PhraseController)
     Auth/                   AuthConfig, TokenService, LoginRateLimiter (токен адміна й ліміт спроб)
     Repository/             SQL-запити до таблиць (PhraseRepository)
     Support/                Config, Db, Json, Logger, ApiException, Iso8601, IdList
-    Domain/                 Categories, Languages — єдині списки кодів (без залежностей)
+    Domain/                 Categories, Languages — єдині списки кодів; Phrase, PhraseFilter — фраза API і параметри списку (без залежностей)
     Database/               Migrator, SqlSplitter, SchemaBuilder, Seeder, DatabaseGuard
   bin/                      CLI-скрипти: migrate.php, seed.php, build-schema.php, hash-password.php
   database/
@@ -43,7 +43,7 @@ backend/
     seed/phrases.php        дані сіду (лише для тестової БД)
   docker/mysql-init/        створення БД orakuls_test при першому запуску MySQL
   tests/                    run.php (юніт-перевірки), api.php + api/*.php (тестова БД),
-                            smoke.php (по HTTP), lib.php, db-lib.php (спільні хелпери)
+                            smoke.php (по HTTP), lib.php, db-lib.php, auth-lib.php (спільні хелпери)
   Dockerfile, docker-compose.yml, .env.example
 ```
 
@@ -64,10 +64,11 @@ backend/
 | `Controller\*` | Обробники ендпоінтів: `fn(Request, array $params): Response`. Контролер тонкий: розбирає ввід, викликає репозиторій, формує відповідь |
 | `Controller\MessageController` | `GET /api/message`: перевіряє `lang`, розбирає `exclude`, повертає випадкове послання (BE-003) |
 | `Controller\AuthController` | `POST /api/admin/auth/login` (порядок: конфігурація → 400 → 422 → 429 → 401/200) і `GET /api/admin/auth/me`; токен не перевіряє — це робить guard (BE-004) |
+| `Controller\PhraseController` | `GET /api/admin/phrases` і `GET /api/admin/phrases/{id}` (BE-005): `parseFilter()` суворо розбирає параметри до звернення до БД (D-25), `index`/`show` викликають `PhraseRepository` і віддають `Phrase::toArray()` з `no-store` |
 | `Auth\AuthConfig` | Читає `ADMIN_LOGIN`, `ADMIN_PASSWORD_HASH`, `TOKEN_SECRET`, `TOKEN_TTL_HOURS`; некоректна конфігурація → лог (лише назва змінної) і `500` (fail-closed) |
 | `Auth\TokenService` | Випуск і сувора перевірка JWT HS256 без бібліотек (D-21); «поточний час» приходить параметром |
 | `Auth\LoginRateLimiter` | Ліміт невдалих спроб входу за IP на таблиці `login_attempts` (D-22) |
-| `Repository\PhraseRepository` | Єдине місце SQL до `phrases` (D-17): `findRandom()`, `hasTextSql()`. Отримує `PDO` ззовні |
+| `Repository\PhraseRepository` | Єдине місце SQL до `phrases` (D-17): `findRandom()`, `search()` (сторінка + `COUNT(*)` з одним `WHERE`, D-26), `find()`, `hasTextSql()`/`lacksTextSql()`, `escapeLike()` (D-24). Отримує `PDO` ззовні |
 | `Support\ApiException` | Очікувана помилка API (статус + код + повідомлення + `fields` + додаткові заголовки, напр. `Retry-After`) |
 | `Support\Config` | `.env` + змінні процесу |
 | `Support\Db` | Ліниве PDO-з'єднання з уніфікованими налаштуваннями сесії |
@@ -77,6 +78,8 @@ backend/
 | `Support\IdList` | Розбір списку ID з query (`exclude`): сміття пропускається, повтори прибираються, максимум 200 ID; ніколи не кидає винятків (D-18) |
 | `Domain\Categories` | Єдиний список категорій і сувора перевірка коду |
 | `Domain\Languages` | Коди мов і білий список для імені колонки `text_*` |
+| `Domain\Phrase` | Незмінна фраза API: `fromRow()` (рядок БД → `int`, `bool`, ISO 8601, `text` з ключами `lv`, `en`, `ru`) і `toArray()` у порядку `API.md`; єдине відображення для BE-005 … BE-007 (D-26) |
+| `Domain\PhraseFilter` | Параметри списку фраз (`category`, `search`, `missing`, `isActive`, `page`, `perPage`) і `offset()`; чисті дані |
 | `Database\Migrator` | Застосовує міграції по одному оператору, веде таблицю `migrations` |
 | `Database\SqlSplitter` | Розбиває SQL-файл на оператори (D-15) |
 | `Database\SchemaBuilder` | Збирає `schema.sql` з міграцій (D-16) |
@@ -88,15 +91,15 @@ backend/
 
 ```
 Controller ──► Repository, Auth, Http, Support, Domain
-Repository ──► Domain, Support, PDO  (нічого з Http)
+Repository ──► Domain, Support, PDO  (нічого з Http; з Domain — Phrase, PhraseFilter, Languages)
 Http       ──► Auth, Support
 Auth       ──► Support, PDO  (нічого з Http / Controller)
 Database   ──► Support, Domain, PDO
-Support    ──► (нічого з Http / Controller / Repository / Database)
-Domain     ──► (ні від чого)
+Support    ──► (нічого з Http / Controller / Repository / Database / Domain)
+Domain     ──► Support\Iso8601 (лише Phrase); Categories, Languages, PhraseFilter — ні від чого
 ```
 
-`Support` не знає про HTTP: його можна використовувати з будь-якого місця (у т. ч. зі скриптів `bin/`) без запуску веб-шару. `Repository` не знає про HTTP і сам не відкриває з'єднання: `PDO` передає контролер (`Db::pdo()`), тож репозиторій можна запускати і з тестів, і зі скриптів. `Database` не залежить від `Http` і `Controller`, а `Domain` — звичайні константи й чисті функції без залежностей.
+`Support` не знає про HTTP: його можна використовувати з будь-якого місця (у т. ч. зі скриптів `bin/`) без запуску веб-шару. `Repository` не знає про HTTP і сам не відкриває з'єднання: `PDO` передає контролер (`Db::pdo()`), тож репозиторій можна запускати і з тестів, і зі скриптів. `Database` не залежить від `Http` і `Controller`, а `Domain` — константи, чисті функції й незмінні об'єкти без залежностей від інших шарів (єдиний виняток — `Phrase` користується `Support\Iso8601`; `Support` про `Domain` не знає, тож циклу немає).
 
 Ланцюжок `Support` ← `Auth` ← `Http` без циклів: `Auth` (конфігурація, токен, ліміт) залежить лише від `Support` і `PDO`, тож його можна перевіряти без HTTP, а `Http\AdminGuard` використовує `Auth`, але не навпаки. Контролер авторизації (`AuthController`) бере з `Auth` усе потрібне для входу.
 
@@ -121,7 +124,7 @@ Apache / php -S
 
 | Компонент | Задача |
 |-----------|--------|
-| Контролери фраз, валідація фрази (нові методи в `PhraseRepository`) | BE-005 … BE-007 |
+| Створення, зміна, видалення фраз (нові методи в `PhraseRepository`, валідація фрази) та імпорт | BE-006, BE-007 |
 | `StatsController` | BE-008 |
 | `.htaccess`, точка входу для хостингу | BE-009 |
 
