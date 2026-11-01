@@ -23,6 +23,7 @@ return static function (Router $router): void {
     // Літеральні маршрути (імпорт, статистика) реєструвати ПЕРЕД маршрутами з {id}
     $router->get('/api/admin/phrases', [new PhraseController(), 'index']);
     $router->post('/api/admin/phrases', [new PhraseController(), 'create']);
+    $router->post('/api/admin/phrases/import', [new PhraseController(), 'import']);
     $router->get('/api/admin/phrases/{id}', [new PhraseController(), 'show']);
     $router->put('/api/admin/phrases/{id}', [new PhraseController(), 'update']);
     $router->delete('/api/admin/phrases/{id}', [new PhraseController(), 'delete']);

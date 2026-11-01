@@ -17,7 +17,8 @@ use App\Support\ApiException;
 use App\Support\Db;
 
 /**
- * Фрази для адмінки: читання (GET /api/admin/phrases, GET /api/admin/phrases/{id}) і запис (POST, PUT, DELETE).
+ * Фрази для адмінки: читання (GET /api/admin/phrases, GET /api/admin/phrases/{id}), запис (POST, PUT, DELETE)
+ * і масовий імпорт (POST /api/admin/phrases/import).
  * Токен перевіряє AdminGuard у Kernel (D-20), тут його не повторюємо.
  * Явні фільтри строгі (на відміну від exclude у BE-003): невідоме значення — 400, бо адмін обирає їх сам.
  * Валідація завершується до звернення до БД: відхилений запит не виконує жодного SQL.
@@ -26,6 +27,7 @@ final class PhraseController
 {
     private const MAX_SEARCH_CHARS = 200;
     private const MAX_PER_PAGE = 100;
+    private const MAX_IMPORT_ITEMS = 1000;
 
     public function index(Request $request, array $params): Response
     {
@@ -68,6 +70,52 @@ final class PhraseController
         $phrase = (new PhraseRepository(Db::pdo()))->create($input);
 
         return Response::json($phrase->toArray(), 201, ['Cache-Control' => 'no-store']);
+    }
+
+    /**
+     * POST /api/admin/phrases/import — масовий імпорт (BE-007). Порядок: тіло (400) → items (422) → усі елементи
+     * в пам'яті → (лише якщо є валідні) один запис у БД → 200. Валідні зберігаються, невалідні пропускаються і
+     * потрапляють у errors з позицією в items (з 0). Збереження валідних атомарне (PhraseRepository::createMany).
+     * Імпортовані фрази завжди активні: isActive з елемента ігнорується.
+     */
+    public function import(Request $request, array $params): Response
+    {
+        $data = $request->json();
+
+        if (!array_key_exists('items', $data)) {
+            throw ApiException::validation(['items' => 'required']);
+        }
+        $items = $data['items'];
+        // {} і [] після json_decode — однаковий порожній масив: це порожній список (D-31)
+        if (!is_array($items) || ($items !== [] && !array_is_list($items))) {
+            throw ApiException::validation(['items' => 'invalid']);
+        }
+        if (count($items) > self::MAX_IMPORT_ITEMS) {
+            throw ApiException::validation(['items' => 'too_many']);
+        }
+
+        $inputs = [];
+        $errors = [];
+        foreach ($items as $index => $item) {
+            // Елемент — JSON-об'єкт: масив, що не є непорожнім списком ([] і {} — порожній об'єкт, піде до валідатора)
+            if (!is_array($item) || ($item !== [] && array_is_list($item))) {
+                $errors[] = ['index' => $index, 'fields' => ['item' => 'invalid']];
+                continue;
+            }
+
+            unset($item['isActive']); // імпортовані фрази завжди активні; навіть невалідне значення не є помилкою
+            $result = PhraseValidator::validate($item);
+            if ($result['input'] === null) {
+                $errors[] = ['index' => $index, 'fields' => $result['fields']];
+                continue;
+            }
+            $inputs[] = $result['input'];
+        }
+
+        // Db::pdo() лише тут: без валідних елементів БД не відкривається взагалі
+        $created = $inputs === [] ? 0 : (new PhraseRepository(Db::pdo()))->createMany($inputs);
+
+        return Response::json(['created' => $created, 'errors' => $errors], 200, ['Cache-Control' => 'no-store']);
     }
 
     /**
