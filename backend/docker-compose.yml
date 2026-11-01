@@ -1,0 +1,37 @@
+# Локальне оточення бекенда: PHP 8.4 + MySQL 5.7 (ті самі версії, що на хостингу GoDaddy).
+# Запуск із папки backend/:  docker compose up -d --build
+# Значення ${DB_*} підтягуються з backend/.env (див. .env.example).
+
+services:
+  php:
+    build: .
+    command: php -S 0.0.0.0:8000 -t public public/index.php
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: mysql:5.7
+    platform: linux/amd64
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:-root}
+      MYSQL_DATABASE: ${DB_NAME:-orakuls}
+      MYSQL_USER: ${DB_USER:-orakuls}
+      MYSQL_PASSWORD: ${DB_PASS:-orakuls}
+    ports:
+      - "3307:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  db_data:
