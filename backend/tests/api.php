@@ -15,6 +15,16 @@ const TEST_DB_NAME = 'orakuls_test';
 // а Db тримає з'єднання статично — після першого виклику змінити БД уже неможливо.
 putenv('DB_NAME=' . TEST_DB_NAME);
 
+// Облікові дані адміна для тестів авторизації (BE-004): так само до bootstrap і поверх .env, тож тести не залежать
+// від локального backend/.env. Cost 4 замість 12 за замовчуванням: 1 мс замість ~165 мс на кожен password_verify.
+const TEST_ADMIN_LOGIN = 'test-admin';
+const TEST_ADMIN_PASSWORD = 'test-password-123456';
+const TEST_TOKEN_SECRET = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'; // 64 символи
+putenv('ADMIN_LOGIN=' . TEST_ADMIN_LOGIN);
+putenv('ADMIN_PASSWORD_HASH=' . password_hash(TEST_ADMIN_PASSWORD, PASSWORD_BCRYPT, ['cost' => 4]));
+putenv('TOKEN_SECRET=' . TEST_TOKEN_SECRET);
+putenv('TOKEN_TTL_HOURS='); // порожнє = за замовчуванням (168 год)
+
 require APP_ROOT . '/src/bootstrap.php';
 require __DIR__ . '/lib.php';
 require __DIR__ . '/db-lib.php';

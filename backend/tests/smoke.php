@@ -12,9 +12,14 @@ $failed = 0;
 /**
  * @return array{status: int, headers: array<string, string>, body: string}
  */
-function call(string $method, string $url): array
+function call(string $method, string $url, ?string $body = null, ?string $contentType = null): array
 {
-    $context = stream_context_create(['http' => ['method' => $method, 'ignore_errors' => true, 'timeout' => 15]]);
+    $options = ['method' => $method, 'ignore_errors' => true, 'timeout' => 15];
+    if ($body !== null) {
+        $options['content'] = $body;
+        $options['header'] = 'Content-Type: ' . ($contentType ?? 'application/json');
+    }
+    $context = stream_context_create(['http' => $options]);
     $body = (string) @file_get_contents($url, false, $context);
 
     $status = 0;
@@ -94,6 +99,35 @@ check('GET /api/message з сміттям у exclude → 200/404, але не 40
 
 $r = call('POST', "{$base}/api/message?lang=lv");
 check('POST /api/message → 404 not_found', $r['status'] === 404 && (json_decode($r['body'], true)['error']['code'] ?? '') === 'not_found', "status={$r['status']}");
+
+// ---------- Адмінка без облікових даних (BE-004) ----------
+// Неправильні логін/пароль СЮДИ НЕ ВІДПРАВЛЯТИ: вони рахуються в ліміт спроб, і на хостингу smoke заблокував би IP розробника.
+// Усе нижче відхиляється до перевірки пароля й у ліміт не потрапляє.
+
+$unauthorized = static fn (array $r): bool => $r['status'] === 401
+    && (json_decode($r['body'], true)['error']['code'] ?? '') === 'unauthorized'
+    && str_starts_with($r['headers']['content-type'] ?? '', 'application/json');
+
+$r = call('GET', "{$base}/api/admin/auth/me");
+check('GET /api/admin/auth/me без токена → 401 unauthorized, JSON', $unauthorized($r), "status={$r['status']} body={$r['body']}");
+
+$r = call('GET', "{$base}/api/admin/phrases");
+check('GET /api/admin/phrases без токена → 401', $unauthorized($r), "status={$r['status']} body={$r['body']}");
+
+$r = call('GET', "{$base}/api/admin/nope");
+check('GET невідомого /api/admin/… без токена → 401, а не 404', $unauthorized($r), "status={$r['status']} body={$r['body']}");
+
+$r = call('POST', "{$base}/api/admin/auth/login", '{}');
+check(
+    'POST /api/admin/auth/login з {} → 422 validation_error (не 500), no-store',
+    $r['status'] === 422
+        && (json_decode($r['body'], true)['error']['code'] ?? '') === 'validation_error'
+        && ($r['headers']['cache-control'] ?? '') === 'no-store',
+    "status={$r['status']} body={$r['body']}"
+);
+
+$r = call('POST', "{$base}/api/admin/auth/login", 'not json');
+check('POST /api/admin/auth/login з not json → 400 bad_request', $r['status'] === 400 && (json_decode($r['body'], true)['error']['code'] ?? '') === 'bad_request', "status={$r['status']} body={$r['body']}");
 
 echo $failed === 0 ? "\nвсе гаразд\n" : "\nпровалено: {$failed}\n";
 exit($failed === 0 ? 0 : 1);

@@ -90,9 +90,36 @@ function apiKernel(): Kernel
  * @param array<string, mixed>  $query   вже розібраний query ('exclude' => '1,2' або ['1', '2'])
  * @param array<string, string> $headers імена в нижньому регістрі
  */
-function apiRequest(string $method, string $path, array $query = [], array $headers = [], string $body = ''): Response
+function apiRequest(string $method, string $path, array $query = [], array $headers = [], string $body = '', string $ip = 'unknown'): Response
 {
-    return apiKernel()->handle(new Request($method, $path, $query, $headers, $body));
+    return apiKernel()->handle(new Request($method, $path, $query, $headers, $body, $ip));
+}
+
+/**
+ * Тимчасово задає змінні процесу на час виклику $fn і в `finally` повертає попередні значення —
+ * інакше один тест ламав би наступні. Значення null прибирає змінну (тоді Config::get() знову бачить
+ * значення з .env); порожній рядок — це значення, а не відсутність.
+ *
+ * @param array<string, ?string> $vars
+ */
+function withEnv(array $vars, callable $fn): mixed
+{
+    $previous = [];
+    foreach ($vars as $name => $_) {
+        $previous[$name] = getenv($name); // false — змінної не було
+    }
+
+    try {
+        foreach ($vars as $name => $value) {
+            putenv($value === null ? $name : "{$name}={$value}");
+        }
+
+        return $fn();
+    } finally {
+        foreach ($previous as $name => $value) {
+            putenv($value === false ? $name : "{$name}={$value}");
+        }
+    }
 }
 
 /**
