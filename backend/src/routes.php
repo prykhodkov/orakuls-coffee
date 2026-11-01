@@ -6,6 +6,7 @@ use App\Controller\AuthController;
 use App\Controller\HealthController;
 use App\Controller\MessageController;
 use App\Controller\PhraseController;
+use App\Controller\StatsController;
 use App\Http\Router;
 
 return static function (Router $router): void {
@@ -27,4 +28,7 @@ return static function (Router $router): void {
     $router->get('/api/admin/phrases/{id}', [new PhraseController(), 'show']);
     $router->put('/api/admin/phrases/{id}', [new PhraseController(), 'update']);
     $router->delete('/api/admin/phrases/{id}', [new PhraseController(), 'delete']);
+
+    // Зведення для адмінки (BE-008)
+    $router->get('/api/admin/stats', [new StatsController(), 'index']);
 };
