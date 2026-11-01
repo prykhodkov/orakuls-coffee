@@ -28,6 +28,7 @@ putenv('TOKEN_TTL_HOURS='); // порожнє = за замовчуванням 
 require APP_ROOT . '/src/bootstrap.php';
 require __DIR__ . '/lib.php';
 require __DIR__ . '/db-lib.php';
+require __DIR__ . '/auth-lib.php';
 
 // bootstrap вішає HTTP-орієнтований обробник винятків, тому підготовку БД ловимо самі
 try {

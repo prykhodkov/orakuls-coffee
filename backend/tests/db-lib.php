@@ -79,3 +79,65 @@ function schemaSignature(PDO $pdo): array
         )->fetchAll(),
     ];
 }
+
+/** Деактивує всі фрази, окрім однієї: відповідь стає детермінованою. */
+function keepOnlyActive(PDO $pdo, int $id): void
+{
+    $pdo->prepare('UPDATE phrases SET is_active = 0 WHERE id <> ?')->execute([$id]);
+}
+
+/** Сесійний лічильник байтів, відправлених сервером БД цьому з'єднанню. Rows_sent у MySQL 5.7 немає. */
+function bytesSent(PDO $pdo): int
+{
+    $row = $pdo->query("SHOW SESSION STATUS LIKE 'Bytes_sent'")->fetch(PDO::FETCH_NUM);
+
+    return (int) $row[1];
+}
+
+/**
+ * Виконує $fn на таблиці з 600 фразами (сід + 570 довгих) у транзакції, яка відкочується.
+ * Відкат не повертає AUTO_INCREMENT, тому в кінці reseed() (TRUNCATE).
+ */
+function withBigTable(callable $fn): void
+{
+    $pdo = testPdo();
+    reseed();
+    $pdo->beginTransaction();
+    try {
+        $insert = $pdo->prepare(
+            'INSERT INTO phrases (category, text_lv, text_en, text_ru, is_active, created_at, updated_at)'
+            . " VALUES ('love', ?, '', '', 1, UTC_TIMESTAMP(), UTC_TIMESTAMP())"
+        );
+        for ($i = 1; $i <= 570; $i++) {
+            $insert->execute([str_repeat("Фраза номер {$i}. ", 6)]);
+        }
+        assertSame(600, phraseCount($pdo), 'у таблиці має бути 600 фраз');
+
+        $fn();
+    } finally {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        reseed();
+    }
+}
+
+/**
+ * Скільки SQL-запитів (виконань prepared statement) зробив $fn на цьому з'єднанні.
+ * Накладні самого заміру (PDO::query при вимкненій емуляції теж іде через prepare) віднімаються.
+ */
+function statementCount(callable $fn): int
+{
+    $pdo = testPdo();
+    $read = static fn (): int => (int) $pdo->query("SHOW SESSION STATUS LIKE 'Com_stmt_execute'")->fetch(PDO::FETCH_NUM)[1];
+
+    $a = $read();
+    $b = $read();
+    $overhead = $b - $a;      // = 1: кожен замір сам виконує один prepared statement
+
+    $before = $read();
+    $fn();
+    $after = $read();
+
+    return ($after - $before) - $overhead;
+}
