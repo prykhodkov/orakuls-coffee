@@ -24,6 +24,9 @@ final class PhraseRepository
     /** Службовий символ x02 замість % у пошуку, що починається з % (обхід вади LIKE у MySQL 5.7, див. buildWhere). */
     private const PERCENT_STAND_IN = "\x02";
 
+    /** Рядків в одному багаторядковому INSERT імпорту: 100 × 5 плейсхолдерів, далеко від ліміту 65 535. */
+    private const INSERT_BATCH = 100;
+
     public function __construct(private readonly PDO $pdo)
     {
     }
@@ -128,6 +131,53 @@ final class PhraseRepository
         }
 
         return $phrase;
+    }
+
+    /**
+     * Масова вставка для імпорту (BE-007): усе або нічого — одна транзакція на виклик, пакети по INSERT_BATCH рядків
+     * (багаторядковий INSERT), created_at і updated_at у пакеті від одного UTC_TIMESTAMP(). Транзакцією керує сам
+     * метод. Будь-який збій (Throwable) → rollBack() і той самий виняток далі: ErrorHandler віддасть 500.
+     * Порожній список — 0 без запитів і без транзакції. lastInsertId не потрібен: id створених фраз не повертаємо.
+     *
+     * @param list<PhraseInput> $inputs
+     * @return int кількість вставлених рядків
+     */
+    public function createMany(array $inputs): int
+    {
+        if ($inputs === []) {
+            return 0;
+        }
+
+        $columns = [];
+        foreach (Languages::CODES as $lang) {
+            $columns[] = '`' . Languages::column($lang) . '`';
+        }
+        $head = 'INSERT INTO `phrases` (`category`, ' . implode(', ', $columns) . ', `is_active`, `created_at`, `updated_at`) VALUES ';
+        $row = '(?, ?, ?, ?, ?, UTC_TIMESTAMP(), UTC_TIMESTAMP())';
+
+        $this->pdo->beginTransaction();
+        try {
+            foreach (array_chunk($inputs, self::INSERT_BATCH) as $batch) {
+                $stmt = $this->pdo->prepare($head . implode(', ', array_fill(0, count($batch), $row)));
+                $n = 1; // позиційні параметри нумеруються з 1 наскрізно по всьому пакету
+                foreach ($batch as $input) {
+                    $stmt->bindValue($n++, $input->category, PDO::PARAM_STR);
+                    foreach (Languages::CODES as $lang) {
+                        $stmt->bindValue($n++, $input->text[$lang], PDO::PARAM_STR);
+                    }
+                    $stmt->bindValue($n++, $input->isActive ? 1 : 0, PDO::PARAM_INT);
+                }
+                $stmt->execute();
+            }
+            $this->pdo->commit();
+        } catch (\Throwable $e) {
+            if ($this->pdo->inTransaction()) {
+                $this->pdo->rollBack();
+            }
+            throw $e;
+        }
+
+        return count($inputs);
     }
 
     /**
