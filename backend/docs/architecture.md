@@ -86,9 +86,9 @@ Apache / php -S
 
 | Компонент | Задача |
 |-----------|--------|
-| Схема БД, міграції, runner | BE-002 |
+| Таблиця `phrases`, міграції, runner (`bin/migrate.php`), тестова БД `orakuls_test` зі сідом, `tests/api.php` | BE-002 |
 | `MessageController` (`GET /api/message`) | BE-003 |
-| Авторизація: `AuthController`, middleware для `/api/admin/*`, токен | BE-004 |
+| Авторизація: `AuthController`, middleware для `/api/admin/*`, токен, таблиця `login_attempts` (власна міграція) | BE-004 |
 | Контролери фраз, валідація фрази | BE-005 … BE-007 |
 | `StatsController` | BE-008 |
 | `.htaccess`, точка входу для хостингу | BE-009 |
