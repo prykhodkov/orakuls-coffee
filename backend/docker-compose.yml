@@ -17,7 +17,9 @@ services:
   db:
     image: mysql:5.7
     platform: linux/amd64
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    # innodb-flush-log-at-trx-commit=2: лише для розробки — довговічність у тестах не потрібна, а кожна видача послання тепер пише
+    # лічильник (BE-012): без цього tests/api.php іде вдвічі довше (≈45 с замість ≈22 с). На хостингу цей параметр не діє.
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --innodb-flush-log-at-trx-commit=2
     environment:
       MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASS:-root}
       MYSQL_DATABASE: ${DB_NAME:-orakuls}

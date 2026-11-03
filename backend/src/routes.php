@@ -7,6 +7,8 @@ use App\Controller\HealthController;
 use App\Controller\MessageController;
 use App\Controller\PhraseController;
 use App\Controller\StatsController;
+use App\Controller\VisitController;
+use App\Controller\VisitReportController;
 use App\Http\Router;
 
 return static function (Router $router): void {
@@ -15,6 +17,8 @@ return static function (Router $router): void {
 
     // Публічна частина
     $router->get('/api/message', [new MessageController(), 'show']);
+    // Облік відкриттів сайту і сканувань QR (BE-011); без авторизації, відповідь 204
+    $router->post('/api/visit', [new VisitController(), 'record']);
 
     // Адмінка. Захист /api/admin/* — у Kernel (AdminGuard), контролери перевірку токена не повторюють
     $router->post('/api/admin/auth/login', [new AuthController(), 'login']);
@@ -31,4 +35,7 @@ return static function (Router $router): void {
 
     // Зведення для адмінки (BE-008)
     $router->get('/api/admin/stats', [new StatsController(), 'index']);
+
+    // Звіт зі статистики відкриттів за період (BE-013)
+    $router->get('/api/admin/visits', [new VisitReportController(), 'index']);
 };

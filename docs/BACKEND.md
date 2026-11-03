@@ -42,9 +42,9 @@ backend/
     Http/                 — Request, Response, Router, Kernel, ErrorHandler, AdminGuard
     Controller/           — обробники ендпоінтів
     Auth/                 — AuthConfig, TokenService, LoginRateLimiter (токен адміна, ліміт спроб)
-    Repository/           — SQL-запити до таблиць (PhraseRepository)
-    Support/              — Config, Db, Json, Logger, ApiException, Iso8601, IdList
-    Domain/               — Categories, Languages (єдині списки кодів), Phrase, PhraseFilter, PhraseInput, PhraseValidator
+    Repository/           — SQL-запити до таблиць (PhraseRepository, DailyStatsRepository)
+    Support/              — Config, Db, Json, Logger, ApiException, Iso8601, IdList, RigaClock
+    Domain/               — Categories, Languages, StatMetrics (єдині списки кодів), ReportPeriod, VisitReport (звіт зі статистики), Phrase, PhraseFilter, PhraseInput, PhraseValidator
     Database/             — Migrator, SqlSplitter, SchemaBuilder, Seeder, DatabaseGuard
   bin/                    — CLI: migrate.php, seed.php, build-schema.php, hash-password.php
   database/               — migrations/*.sql, schema.sql (генерується), seed/phrases.php (лише тест)
@@ -179,6 +179,47 @@ API_PROXY_TARGET=http://localhost:8000
 - Фраза з категорією поза списком (лише ручне редагування БД) входить у `total`, але не в `byCategory`.
 
 Рішення — [D-32](../backend/docs/decisions.md); опис відповіді — [backend/docs/api-conventions.md](../backend/docs/api-conventions.md).
+
+## Облік відкриттів сайту (BE-011)
+
+Запит [F-005](FRONT-TO-BACK.md). Таблиця `daily_stats` (міграція `003`), публічний `POST /api/visit`, лічильник виданих послань у `GET /api/message` (BE-012) і звіт `GET /api/admin/visits` (BE-013) — **усе готове**; вкладка «Статистика» в адмінці працює проти справжнього бекенда (див. розділ про BE-013 нижче).
+
+| Ендпоінт | Успіх | Статус |
+|----------|-------|--------|
+| `POST /api/visit` | `204` без тіла, `Cache-Control: no-store` | готово |
+| `GET /api/message` — лічильник `messages`, `byLang` | відповідь не змінюється | готово (BE-012) |
+| `GET /api/admin/visits` | звіт за період | готово (BE-013) |
+
+- Тіло `{ "source": "qr" }` → `visits +1` і `scans +1`; `{ "source": "direct" }` (і будь-що інше: відсутній, невідомий рядок, не рядок, `"QR"`) → лише `visits +1`. Суворо `=== 'qr'`, регістр значущий.
+- Порожнє/не-JSON/не-об'єкт → `400 bad_request`, нічого не рахується. Збій БД → `500` (фронт відповідь ігнорує). Тіло `[]` PHP не відрізняє від `{}` → `204` як `direct`.
+- З запиту береться лише `source`: адреса (`?qr`), `Referer`, `User-Agent`, IP не читаються й не зберігаються. Зберігаються лише кількості по днях.
+- **День — за часом Риги** (`Europe/Riga`), не UTC: «вчора» означає латвійське вчора. Дату рахує PHP.
+- **Лічильник виданих послань (BE-012):** бекенд сам рахує кожну успішну видачу (`200`) по мовах (`message_lv|en|ru`) за день за Ригою; фронт нічого не шле. `400` і `404` не рахуються, контракт `GET /api/message` не змінився. Збій лічильника не ламає видачу (користувач отримує послання, помилка йде в лог). `messages` < `visits` — очікувано: повторне сканування протягом 20 хв фронт показує з localStorage, не звертаючись до API.
+- Захисту від накрутки немає (рішення F-005): лічильник може «накрутити» той, хто шле запити вручну.
+- **Міграцію `003` треба застосувати до розгортання коду** (`bin/migrate.php`, або вручну на хостингу, якщо БД імпортована з `schema.sql` до BE-011): без таблиці `POST /api/visit` дає `500` (фронт це ігнорує, але відкриття не рахуються).
+- Тестові відкриття й видачі на проді лишаються в статистиці (скинути нічим): `tests/smoke.php` за замовчуванням нічого не пише, запис вмикається `SMOKE_WRITE=1` (`POST /api/visit` → +1 `visit`, дві видачі `lang=lv` → +2 `message_lv`) — на проді перед друком QR не вмикати.
+
+Рішення — [D-33](../backend/docs/decisions.md), [D-34](../backend/docs/decisions.md); таблиця — [database.md](../backend/docs/database.md); опис відповіді — [api-conventions.md](../backend/docs/api-conventions.md).
+
+
+## Звіт зі статистики (BE-013)
+
+Запит [F-005](FRONT-TO-BACK.md); потрібен `Authorization: Bearer <token>` (без нього `401`). Ендпоінт **готовий**.
+
+| Ендпоінт | Успіх | Статус |
+|----------|-------|--------|
+| `GET /api/admin/visits?from=YYYY-MM-DD&to=YYYY-MM-DD` | `200` + `{ from, to, timezone, total, days }` | готово |
+
+- **Відповідь:** `{ "from": "2026-10-05", "to": "2026-11-03", "timezone": "Europe/Riga", "total": { "visits": 1600, "scans": 1403, "messages": 1324, "byLang": { "lv": 674, "en": 254, "ru": 396 } }, "days": [ { "date": "2026-10-05", "visits": 38, "scans": 33, "messages": 30, "byLang": { "lv": 15, "en": 6, "ru": 9 } }, … ] }`. Ключі й порядок — як у моку фронта (`visits.js`); усі числа — JSON-числа.
+- `days` — **кожен** день періоду по зростанню дати, дні без даних — нулі (графік пропусків не очікує). `total` — сума `days` (рахує бекенд, фронт її не перераховує). `byLang` — завжди `lv`, `en`, `ru`, навіть з нулями. `messages` = `lv + en + ru`; `messages` < `visits` — очікувано (повторне сканування з localStorage не звертається до API).
+- Дні — за часом Риги, межі включно; майбутні дати дозволені (нулі); зайві параметри ігноруються; відповідь не кешується (`no-store`).
+- `400 bad_request` (без `fields`): `from`/`to` відсутній, порожній, не `YYYY-MM-DD`, неіснуюча дата (`2026-02-30`), `from > to`, період довший за **366 днів** включно. Фронт перевіряє те саме до запиту (`dates.js`, `MAX_PERIOD_DAYS = 366`), тож у UI `400` не очікується.
+- Рядок із роком `0000` бекенд відхиляє як неіснуючу дату (`400`).
+- **Перевірка з фронтом (2026-11-03):** форма відповіді звірена з кодом фронта (`mock/visits.js`, `admin/visits.js`, `shared/dates.js`, `real.js`) і прогнана в headless Chromium (Playwright) з `VITE_API_MOCK=false` через dev-проксі на бекенд із тестовою БД і фікстурою історії: скан `/?qr` → `POST /api/visit` `204` і `?qr` зникає з адреси; видача послання `200`; адмінка — вхід, вкладка «Статистика», усі шість пресетів і власний діапазон (24–26.10.2026 → 94 / 72 / 62, lv 30 / en 11 / ru 21) без жодного `≥ 400` і без помилок у консолі; період > 366 днів — помилка в UI без запиту. Це перевірка на тестових даних; на хостингу (BE-009) і з реальною базою фраз її варто повторити.
+- `API.md` ще не містить `POST /api/visit` і `GET /api/admin/visits`: правку вносить фронт (правило 5) разом із закриттям F-001…F-005, у рядку версії згадати F-005.
+
+Рішення — [D-35](../backend/docs/decisions.md); опис відповіді — [api-conventions.md](../backend/docs/api-conventions.md).
+
 
 ## Інтеграція з фронтом (BE-010)
 

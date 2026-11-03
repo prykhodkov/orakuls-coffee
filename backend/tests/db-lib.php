@@ -47,7 +47,10 @@ function resetTestDatabase(PDO $pdo): void
  */
 function reseed(): array
 {
-    return (new Seeder(testPdo(), APP_ROOT . '/database/seed/phrases.php'))->run();
+    $ids = (new Seeder(testPdo(), APP_ROOT . '/database/seed/phrases.php'))->run();
+    testPdo()->exec('TRUNCATE TABLE daily_stats'); // BE-011: лічильники теж стартують з нуля (Seeder::run() це не робить)
+
+    return $ids;
 }
 
 /**

@@ -7,18 +7,25 @@ declare(strict_types=1);
 
 use App\Auth\AuthConfig;
 use App\Auth\TokenService;
+use App\Controller\MessageController;
 use App\Controller\PhraseController;
+use App\Controller\VisitController;
+use App\Controller\VisitReportController;
 use App\Database\DatabaseGuard;
 use App\Database\Migrator;
 use App\Database\SchemaBuilder;
 use App\Database\Seeder;
 use App\Database\SqlSplitter;
 use App\Domain\Categories;
+use App\Domain\InvalidPeriodException;
 use App\Domain\Languages;
 use App\Domain\Phrase;
 use App\Domain\PhraseFilter;
 use App\Domain\PhraseInput;
 use App\Domain\PhraseValidator;
+use App\Domain\ReportPeriod;
+use App\Domain\StatMetrics;
+use App\Domain\VisitReport;
 use App\Http\Request;
 use App\Http\Response;
 use App\Http\Router;
@@ -28,6 +35,7 @@ use App\Support\Config;
 use App\Support\IdList;
 use App\Support\Iso8601;
 use App\Support\Json;
+use App\Support\RigaClock;
 
 define('APP_ROOT', dirname(__DIR__));
 require APP_ROOT . '/src/bootstrap.php';
@@ -1558,6 +1566,312 @@ test('phraseValidator: домен не залежить від Http і Repositor
     assertSame('a', PhraseValidator::trim(str_repeat(' ', 2000000) . 'a' . str_repeat(' ', 2000000)));
     assertSame(0, preg_last_error(), 'preg_replace не повинен падати на довгих серіях');
     assertTrue((hrtime(true) - $start) / 1e6 < 1000, 'trim не повинен бути квадратичним');
+});
+
+// ---------- Облік відкриттів: RigaClock, StatMetrics, POST /api/visit (BE-011) ----------
+
+/** Момент UTC за ISO-рядком ('2026-11-02T22:30:00Z'). */
+function utcMoment(string $iso): DateTimeImmutable
+{
+    return new DateTimeImmutable($iso, new DateTimeZone('UTC'));
+}
+
+test('RigaClock::dayOf: момент UTC → день за Ригою (межі зимового й літнього часу, перехід, межа року)', function () {
+    $cases = [
+        '2026-11-02T22:30:00Z' => '2026-11-03', '2026-11-02T21:59:59Z' => '2026-11-02', '2026-11-02T22:00:00Z' => '2026-11-03',
+        '2026-06-30T20:59:59Z' => '2026-06-30', '2026-06-30T21:00:00Z' => '2026-07-01',
+        // 2026-03-29: доба 23 год (03:00 → 04:00)
+        '2026-03-28T21:59:59Z' => '2026-03-28', '2026-03-28T22:00:00Z' => '2026-03-29', '2026-03-29T00:59:59Z' => '2026-03-29',
+        '2026-03-29T01:00:00Z' => '2026-03-29', '2026-03-29T20:59:59Z' => '2026-03-29', '2026-03-29T21:00:00Z' => '2026-03-30',
+        // 2026-10-25: доба 25 год, година 03:xx повторюється
+        '2026-10-24T20:59:59Z' => '2026-10-24', '2026-10-24T21:00:00Z' => '2026-10-25', '2026-10-25T00:30:00Z' => '2026-10-25',
+        '2026-10-25T01:30:00Z' => '2026-10-25', '2026-10-25T21:59:59Z' => '2026-10-25', '2026-10-25T22:00:00Z' => '2026-10-26',
+        '2026-12-31T21:59:59Z' => '2026-12-31', '2026-12-31T22:00:00Z' => '2027-01-01',
+        '2028-02-29T22:00:00Z' => '2028-03-01',
+    ];
+    foreach ($cases as $iso => $day) {
+        assertSame($day, RigaClock::dayOf(utcMoment($iso)), $iso);
+    }
+
+    // Вхідна зона не має значення: той самий момент у будь-якій зоні дає той самий день
+    assertSame('2026-11-03', RigaClock::dayOf(new DateTimeImmutable('2026-11-03T01:30:00+03:00')));
+    assertSame('2026-11-03', RigaClock::dayOf(new DateTimeImmutable('2026-11-02T17:30:00', new DateTimeZone('America/New_York'))));
+});
+
+test('RigaClock: підміна джерела, зона Europe/Riga, реальний час, джерело не-DateTimeImmutable → виняток', function () {
+    $clock = new RigaClock(fn () => utcMoment('2026-11-02T22:30:00Z'));
+    assertSame('Europe/Riga', $clock->now()->getTimezone()->getName());
+    assertSame('2026-11-03', $clock->today());
+    assertSame('2026-11-03 00:30', $clock->now()->format('Y-m-d H:i'));
+
+    $real = (new RigaClock())->today();
+    assertTrue(preg_match('/^\d{4}-\d{2}-\d{2}$/D', $real) === 1, 'формат today()');
+    // Рига попереду UTC на 2–3 год: її дата збігається з UTC-датою або сусідньою (захист від півночі під час виклику)
+    assertTrue(in_array($real, [gmdate('Y-m-d'), gmdate('Y-m-d', time() + 86400), gmdate('Y-m-d', time() - 86400)], true), 'today() поряд з UTC-датою');
+
+    assertThrows(fn () => (new RigaClock(fn () => 'now'))->now(), LogicException::class);
+    assertSame('Europe/Riga', RigaClock::TIMEZONE);
+});
+
+test('RigaClock::isDay: канонічна YYYY-MM-DD і реальна дата', function () {
+    foreach (['2026-11-03', '2028-02-29', '2000-02-29', '9999-12-31', '0999-01-01'] as $ok) {
+        assertTrue(RigaClock::isDay($ok), $ok);
+    }
+    foreach ([
+        '2026-02-30', '2027-02-29', '2100-02-29', '2026-13-01', '2026-00-10', '2026-04-31', '2026-1-1', '2026-1-5', '20261103',
+        '', ' 2026-11-03', '2026-11-03 ', "2026-11-03\n", '2026-11-03T00:00:00', '0000-01-01', '0000-00-00', '26-11-03',
+        '2026/11/03', '+2026-11-03', "٢٠٢٦-١١-٠٣",
+    ] as $bad) {
+        assertTrue(!RigaClock::isDay($bad), 'має бути невалідною: ' . json_encode($bad));
+    }
+});
+
+test('StatMetrics: фіксований список, сувора перевірка, message(мова)', function () {
+    assertSame(['visit', 'scan', 'message_lv', 'message_en', 'message_ru'], StatMetrics::CODES);
+    foreach (StatMetrics::CODES as $code) {
+        assertTrue(StatMetrics::isValid($code), $code);
+    }
+    foreach (['Visit', 'visit ', 'messages', 'message_de', '', ' scan', "scan\n"] as $bad) {
+        assertTrue(!StatMetrics::isValid($bad), json_encode($bad));
+    }
+    assertSame('message_lv', StatMetrics::message('lv'));
+    foreach (Languages::CODES as $lang) {
+        assertTrue(StatMetrics::isValid(StatMetrics::message($lang)), $lang);
+    }
+    foreach (['LV', 'de', '', 'lv '] as $bad) {
+        assertThrows(fn () => StatMetrics::message($bad), InvalidArgumentException::class);
+    }
+    assertSame('visit', StatMetrics::VISIT);
+    assertSame('scan', StatMetrics::SCAN);
+});
+
+test('POST /api/visit: тіло розбирається до звернення до БД (400 без БД), інші методи → 404', function () {
+    // DB_HOST недосяжний: якби контролер раніше за розбір тіла звернувся до БД, відповіддю було б 500, а не 400
+    withEnv(['DB_HOST' => 'unreachable.invalid'], function () {
+        $kernel = kernelWith(fn (Router $r) => $r->post('/api/visit', [new VisitController(), 'record']));
+
+        foreach (['', '   ', 'not json', '{', '5', '"qr"', 'null', 'true', '[1]', '["qr"]'] as $body) {
+            $response = $kernel->handle(new Request('POST', '/api/visit', [], [], $body));
+            assertSame(400, $response->status, "тіло: {$body}");
+            $json = decode($response);
+            assertSame('bad_request', $json['error']['code'], $body);
+            assertSame(['code', 'message'], array_keys($json['error']), "без fields: {$body}");
+            assertSame('no-store', $response->headers['Cache-Control'] ?? null, $body);
+        }
+
+        foreach (['GET', 'PUT', 'DELETE', 'PATCH', 'HEAD'] as $method) {
+            $response = $kernel->handle(new Request($method, '/api/visit'));
+            assertSame(404, $response->status, $method);
+            assertSame('not_found', decode($response)['error']['code'], $method);
+        }
+    });
+});
+
+// ---------- Лічильник виданих послань (BE-012) ----------
+
+test('MessageController: некоректний lang не доходить ні до лічильника, ні до БД (400 без БД, годинник не викликається)', function () {
+    // DB_HOST недосяжний: будь-яке звернення до БД дало б 500, а не 400
+    withEnv(['DB_HOST' => 'unreachable.invalid'], function () {
+        $calls = 0;
+        $clock = new RigaClock(function () use (&$calls) {
+            $calls++;
+
+            return utcMoment('2026-11-02T22:30:00Z');
+        });
+        $kernel = kernelWith(fn (Router $r) => $r->get('/api/message', [new MessageController($clock), 'show']));
+
+        foreach ([[], ['lang' => ''], ['lang' => 'de'], ['lang' => 'LV'], ['lang' => 'lv '], ['lang' => ['lv']]] as $query) {
+            $response = $kernel->handle(new Request('GET', '/api/message', $query));
+            assertSame(400, $response->status, json_encode($query));
+            assertSame('bad_request', decode($response)['error']['code']);
+        }
+        assertSame(0, $calls, 'годинник (лічильник) не викликався');
+    });
+});
+
+test('MessageController: лічильник ловить Throwable, а день і SQL лишаються в репозиторії (сторожовий тест коду)', function () {
+    $source = (string) file_get_contents(APP_ROOT . '/src/Controller/MessageController.php');
+
+    assertTrue(str_contains($source, 'catch (Throwable'), 'catch (Throwable');
+    foreach (['catch (Exception', 'catch (PDOException'] as $narrow) {
+        assertTrue(!str_contains($source, $narrow), "не повинно бути {$narrow}: вузький catch пропустив би TypeError та ін.");
+    }
+    // День рахує DailyStatsRepository (RigaClock), SQL живе в репозиторії (D-17)
+    foreach (['date(', 'time(', 'strtotime(', 'gmdate(', 'mktime(', 'CURDATE', 'CURRENT_DATE', 'NOW(', 'UTC_TIMESTAMP', 'INSERT', 'daily_stats'] as $forbidden) {
+        assertTrue(!str_contains($source, $forbidden), "у контролері не повинно бути {$forbidden}");
+    }
+});
+
+// ---------- Звіт за період: ReportPeriod, VisitReport, parsePeriod, Seeder::loadStats (BE-013) ----------
+
+test('ReportPeriod: дні, межі, високосні роки, переходи часу (3 дні, один раз 2026-10-25), довжина 366/367', function () {
+    $days = static fn (string $from, string $to): array => ReportPeriod::create($from, $to)->days();
+
+    assertSame(['2026-11-03'], $days('2026-11-03', '2026-11-03'));
+    $period = ReportPeriod::create('2026-10-05', '2026-11-03');
+    assertSame(30, $period->dayCount);
+    assertSame('2026-10-05', $period->days()[0]);
+    assertSame('2026-11-03', $period->days()[29]);
+    assertSame(30, count(array_unique($period->days())));
+
+    assertSame(['2028-02-29', '2028-03-01'], $days('2028-02-29', '2028-03-01'));
+    assertSame(['2026-02-27', '2026-02-28', '2026-03-01', '2026-03-02'], $days('2026-02-27', '2026-03-02'), '29 лютого немає');
+    assertSame(['2025-12-30', '2025-12-31', '2026-01-01', '2026-01-02'], $days('2025-12-30', '2026-01-02'));
+    assertSame(['2026-03-28', '2026-03-29', '2026-03-30'], $days('2026-03-28', '2026-03-30'), 'доба 23 год');
+    assertSame(['2026-10-24', '2026-10-25', '2026-10-26'], $days('2026-10-24', '2026-10-26'), 'доба 25 год: 2026-10-25 один раз');
+    assertSame(['9999-12-31'], $days('9999-12-31', '9999-12-31'), 'не виходить за 9999');
+    assertSame(245, count($days('2026-03-01', '2026-10-31')));
+
+    // Незалежна перевірка послідовності (gmmktime, без DST): сусідні дні різняться рівно на добу
+    $all = $days('2026-03-01', '2026-10-31');
+    for ($i = 1; $i < count($all); $i++) {
+        [$y1, $m1, $d1] = array_map('intval', explode('-', $all[$i - 1]));
+        [$y2, $m2, $d2] = array_map('intval', explode('-', $all[$i]));
+        assertSame(86400, gmmktime(0, 0, 0, $m2, $d2, $y2) - gmmktime(0, 0, 0, $m1, $d1, $y1), $all[$i]);
+    }
+
+    assertSame(366, ReportPeriod::create('2026-01-01', '2027-01-01')->dayCount);
+    assertSame(366, ReportPeriod::create('2024-01-01', '2024-12-31')->dayCount, 'високосний рік');
+    assertSame(365, ReportPeriod::create('2025-01-01', '2025-12-31')->dayCount);
+    assertThrows(fn () => ReportPeriod::create('2026-01-01', '2027-01-02'), InvalidPeriodException::class);
+    assertThrows(fn () => ReportPeriod::create('2024-01-01', '2025-01-01'), InvalidPeriodException::class);
+
+    // Той самий результат при зміненому поясі за замовчуванням (арифметика явно в UTC)
+    $previous = date_default_timezone_get();
+    try {
+        foreach (['Europe/Riga', 'America/New_York'] as $zone) {
+            date_default_timezone_set($zone);
+            assertSame(['2026-03-28', '2026-03-29', '2026-03-30'], $days('2026-03-28', '2026-03-30'), $zone);
+            assertSame(['2026-10-24', '2026-10-25', '2026-10-26'], $days('2026-10-24', '2026-10-26'), $zone);
+        }
+    } finally {
+        date_default_timezone_set($previous);
+    }
+});
+
+test('ReportPeriod: погані дати, порядок і довжина → InvalidPeriodException без значення у повідомленні; довжина перевіряється до списку днів', function () {
+    $bad = [
+        '2026-02-30', '2026-13-01', '2026-00-10', '2026-04-31', '2026-02-29', '2100-02-29', '2026-1-5', '26-01-01', '2026/01/01',
+        '20260101', '2026-01-01T00:00:00Z', ' 2026-01-01', '2026-01-01 ', "2026-01-01\n", '', '+2026-01-01', "٢٠٢٦-٠١-٠١", '0000-01-01',
+    ];
+    foreach ($bad as $value) {
+        $e = assertThrows(fn () => ReportPeriod::create($value, '2026-11-03'), InvalidPeriodException::class);
+        assertTrue(str_contains($e->getMessage(), 'from'), 'повідомлення називає параметр from');
+        assertTrue($value === '' || !str_contains($e->getMessage(), trim($value)), 'повідомлення не повторює значення: ' . json_encode($value));
+
+        $e = assertThrows(fn () => ReportPeriod::create('2026-11-03', $value), InvalidPeriodException::class);
+        assertTrue(str_contains($e->getMessage(), "'to'"), 'повідомлення називає параметр to');
+    }
+
+    $e = assertThrows(fn () => ReportPeriod::create('2026-11-04', '2026-11-03'), InvalidPeriodException::class);
+    assertTrue(str_contains($e->getMessage(), 'later'));
+    $e = assertThrows(fn () => ReportPeriod::create('2026-01-01', '2027-01-02'), InvalidPeriodException::class);
+    assertTrue(str_contains($e->getMessage(), '366'));
+
+    // Гігантський період відхиляється до побудови списку днів: швидко й без пам'яті
+    $start = hrtime(true);
+    $memory = memory_get_usage();
+    assertThrows(fn () => ReportPeriod::create('0001-01-01', '9999-12-31'), InvalidPeriodException::class);
+    assertTrue((hrtime(true) - $start) / 1e6 < 50, 'відхилення < 50 мс');
+    assertTrue(memory_get_usage() - $memory < 1_000_000, 'без побудови 3,6 млн днів');
+
+    assertSame('2028-02-29', ReportPeriod::create('2028-02-29', '2028-02-29')->from);
+    assertSame('2000-02-29', ReportPeriod::create('2000-02-29', '2000-02-29')->from);
+    assertSame(['0999-01-01', '0999-01-02'], ReportPeriod::create('0999-01-01', '0999-01-02')->days(), 'рік до 1000');
+});
+
+test('VisitReport::build: усі дні, нулі, мапінг метрик, byLang як об\'єкт, total = сума днів, int, додавання дублікатів', function () {
+    $dates = ['2026-11-01', '2026-11-02', '2026-11-03'];
+
+    // Порожні рядки: 3 дні з нулями int
+    $empty = VisitReport::build($dates, []);
+    assertSame(3, count($empty['days']));
+    foreach ($empty['days'] as $day) {
+        assertSame(['date', 'visits', 'scans', 'messages', 'byLang'], array_keys($day));
+        assertSame(['lv', 'en', 'ru'], array_keys($day['byLang']));
+        assertSame([0, 0, 0, 0], [$day['visits'], $day['scans'], $day['messages'], array_sum($day['byLang'])]);
+    }
+    assertSame(['visits', 'scans', 'messages', 'byLang'], array_keys($empty['total']));
+    assertSame(0, $empty['total']['visits']);
+
+    // Мапінг: різні числа для кожної метрики, тож перестановка помітна; рядки в зворотному порядку; рядки поза періодом і невідома метрика
+    $rows = [
+        ['day' => '2026-11-03', 'metric' => 'message_ru', 'count' => '6'],       // count рядком, як SUM
+        ['day' => '2026-11-03', 'metric' => 'message_en', 'count' => 5],
+        ['day' => '2026-11-03', 'metric' => 'message_lv', 'count' => 4],
+        ['day' => '2026-11-03', 'metric' => 'scan', 'count' => 3],
+        ['day' => '2026-11-03', 'metric' => 'visit', 'count' => 7],
+        ['day' => '2026-11-01', 'metric' => 'visit', 'count' => 2],
+        ['day' => '2026-11-01', 'metric' => 'visit', 'count' => 3],                // дублікат (day, metric): додається
+        ['day' => '2026-11-03', 'metric' => 'foo', 'count' => 100],                // невідома метрика
+        ['day' => '2026-10-31', 'metric' => 'visit', 'count' => 100],              // поза періодом
+        ['day' => '2026-11-04', 'metric' => 'visit', 'count' => 100],
+    ];
+    $report = VisitReport::build($dates, $rows);
+    assertSame(['2026-11-01', '2026-11-02', '2026-11-03'], array_column($report['days'], 'date'), 'порядок за датами, а не за рядками');
+    assertSame(['date' => '2026-11-01', 'visits' => 5, 'scans' => 0, 'messages' => 0, 'byLang' => ['lv' => 0, 'en' => 0, 'ru' => 0]], $report['days'][0]);
+    assertSame(['date' => '2026-11-02', 'visits' => 0, 'scans' => 0, 'messages' => 0, 'byLang' => ['lv' => 0, 'en' => 0, 'ru' => 0]], $report['days'][1], 'порожній день між днями з даними');
+    assertSame(['date' => '2026-11-03', 'visits' => 7, 'scans' => 3, 'messages' => 15, 'byLang' => ['lv' => 4, 'en' => 5, 'ru' => 6]], $report['days'][2]);
+    assertSame(['visits' => 12, 'scans' => 3, 'messages' => 15, 'byLang' => ['lv' => 4, 'en' => 5, 'ru' => 6]], $report['total']);
+
+    // JSON: числа числами, byLang — об'єкт
+    $json = json_encode($report['days'][2]);
+    assertTrue(str_contains($json, '"visits":7') && str_contains($json, '"byLang":{"lv":4'), $json);
+
+    // Великі значення не переповнюють int
+    $big = VisitReport::build(['2026-11-03', '2026-11-04'], [
+        ['day' => '2026-11-03', 'metric' => 'visit', 'count' => 4294967295], ['day' => '2026-11-04', 'metric' => 'visit', 'count' => 4294967295],
+    ]);
+    assertSame(8589934590, $big['total']['visits']);
+
+    assertSame(['days' => [], 'total' => ['visits' => 0, 'scans' => 0, 'messages' => 0, 'byLang' => ['lv' => 0, 'en' => 0, 'ru' => 0]]], array_reverse(VisitReport::build([], [])));
+    assertSame(StatMetrics::CODES, VisitReport::metrics());
+});
+
+test('VisitReportController::parsePeriod: обов\'язкові from і to, масив → 400, без fields, ввід не повторюється, зайві ключі ігноруються', function () {
+    $period = VisitReportController::parsePeriod(new Request('GET', '/api/admin/visits', ['from' => '2026-11-01', 'to' => '2026-11-03', 'x' => '1', 'category' => ['a']]));
+    assertSame(3, $period->dayCount);
+
+    foreach ([[], ['from' => '2026-11-01'], ['to' => '2026-11-03'], ['from' => '', 'to' => ''], ['from' => ['2026-11-01'], 'to' => '2026-11-03'], ['from' => '2026-02-30', 'to' => '2026-03-01'], ['from' => '2026-11-04', 'to' => '2026-11-03'], ['from' => '2026-01-01', 'to' => '2027-01-02']] as $query) {
+        $e = assertThrows(fn () => VisitReportController::parsePeriod(new Request('GET', '/api/admin/visits', $query)), ApiException::class);
+        assertSame(400, $e->status, json_encode($query));
+        assertSame('bad_request', $e->errorCode);
+        assertSame([], $e->fields, 'без fields');
+    }
+
+    $e = assertThrows(fn () => VisitReportController::parsePeriod(new Request('GET', '/api/admin/visits', ['from' => '<script>', 'to' => '2026-11-03'])), ApiException::class);
+    assertTrue(!str_contains($e->getMessage(), '<script>'), 'ввід не повторюється у повідомленні');
+});
+
+test('Seeder::loadStats: фікстура історії валідна (12 днів, 56 рядків, 275 відкриттів); зіпсовані файли → виняток', function () {
+    $rows = Seeder::loadStats(APP_ROOT . '/database/seed/daily_stats.php');
+    assertSame(56, count($rows));
+    assertSame(['day' => '2025-12-30', 'metric' => 'message_en', 'count' => 1], $rows[0], 'порядок day, metric');
+    assertSame(12, count(array_unique(array_column($rows, 'day'))));
+    assertSame(275, array_sum(array_column(array_filter($rows, fn ($r) => $r['metric'] === 'visit'), 'count')), 'контрольна сума visit');
+
+    $file = sys_get_temp_dir() . '/orakuls-stats-seed-' . getmypid() . '.php';
+    try {
+        foreach ([
+            'неіснуюча дата' => [['day' => '2026-02-30', 'visit' => 1]],
+            'повтор дня' => [['day' => '2026-11-01', 'visit' => 1], ['day' => '2026-11-01', 'visit' => 2]],
+            'невідома метрика' => [['day' => '2026-11-01', 'foo' => 1]],
+            'scan > visit' => [['day' => '2026-11-01', 'visit' => 1, 'scan' => 2]],
+            'від\'ємне' => [['day' => '2026-11-01', 'visit' => -1]],
+            'нуль' => [['day' => '2026-11-01', 'visit' => 0]],
+            'дробове' => [['day' => '2026-11-01', 'visit' => 1.5]],
+            'нечислове' => [['day' => '2026-11-01', 'visit' => '5']],
+            'немає day' => [['visit' => 1]],
+        ] as $name => $data) {
+            file_put_contents($file, '<?php return ' . var_export($data, true) . ';');
+            assertThrows(fn () => Seeder::loadStats($file), RuntimeException::class);
+        }
+
+        file_put_contents($file, '<?php return "not an array";');
+        assertThrows(fn () => Seeder::loadStats($file), RuntimeException::class);
+    } finally {
+        @unlink($file);
+    }
 });
 
 // ---------- Запуск ----------

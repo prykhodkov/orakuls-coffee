@@ -30,20 +30,22 @@ backend/
     bootstrap.php           автозавантаження, .env, UTC, обробники помилок
     routes.php              реєстрація маршрутів
     Http/                   Request, Response, Router, Kernel, ErrorHandler, AdminGuard
-    Controller/             обробники ендпоінтів (HealthController, MessageController, AuthController, PhraseController, StatsController)
+    Controller/             обробники ендпоінтів (HealthController, MessageController, AuthController, PhraseController, StatsController, VisitController, VisitReportController)
     Auth/                   AuthConfig, TokenService, LoginRateLimiter (токен адміна й ліміт спроб)
-    Repository/             SQL-запити до таблиць (PhraseRepository)
-    Support/                Config, Db, Json, Logger, ApiException, Iso8601, IdList
-    Domain/                 Categories, Languages — єдині списки кодів; Phrase, PhraseFilter — фраза API і параметри списку; PhraseInput, PhraseValidator — дані й валідація запису фрази (без залежностей від Http/Repository)
+    Repository/             SQL-запити до таблиць (PhraseRepository, DailyStatsRepository)
+    Support/                Config, Db, Json, Logger, ApiException, Iso8601, IdList, RigaClock
+    Domain/                 Categories, Languages, StatMetrics — єдині списки кодів; ReportPeriod, InvalidPeriodException, VisitReport — період і збірка звіту зі статистики; Phrase, PhraseFilter — фраза API і параметри списку; PhraseInput, PhraseValidator — дані й валідація запису фрази (без залежностей від Http/Repository)
     Database/               Migrator, SqlSplitter, SchemaBuilder, Seeder, DatabaseGuard
   bin/                      CLI-скрипти: migrate.php, seed.php, build-schema.php, hash-password.php
   database/
     migrations/             NNN_*.sql — міграції
     schema.sql              повна схема для ручного імпорту (генерується)
     seed/phrases.php        дані сіду (лише для тестової БД)
+    seed/daily_stats.php    історія лічильників для тестів звіту (вантажиться на вимогу, не в reseed())
   docker/mysql-init/        створення БД orakuls_test при першому запуску MySQL
   tests/                    run.php (юніт-перевірки), api.php + api/*.php (тестова БД),
-                            smoke.php (по HTTP), lib.php, db-lib.php, auth-lib.php (спільні хелпери)
+                            smoke.php (по HTTP), lib.php, db-lib.php, auth-lib.php (спільні хелпери),
+                            workers/ (допоміжні CLI-процеси для паралельних перевірок, не тести)
   Dockerfile, docker-compose.yml, .env.example
 ```
 
@@ -62,7 +64,8 @@ backend/
 | `Http\Response` | Незмінний опис відповіді (статус, тіло, заголовки) і `send()` |
 | `Http\ErrorHandler` | Реєструє глобальні обробники помилок; перетворює винятки на JSON-відповіді |
 | `Controller\*` | Обробники ендпоінтів: `fn(Request, array $params): Response`. Контролер тонкий: розбирає ввід, викликає репозиторій, формує відповідь |
-| `Controller\MessageController` | `GET /api/message`: перевіряє `lang`, розбирає `exclude`, повертає випадкове послання (BE-003) |
+| `Controller\MessageController` | `GET /api/message`: перевіряє `lang`, розбирає `exclude`, повертає випадкове послання (BE-003); після успішної видачі збільшує лічильник `message_<мова>` (BE-012, `countIssued()`): збій лічильника ловиться `\Throwable` і лише логується, `RigaClock` у конструкторі — шов для тестів (D-34) |
+| `Controller\VisitReportController` | `GET /api/admin/visits` (BE-013): звіт за період; `parsePeriod()` — суворий розбір `from`/`to` (400 до БД), один `SELECT` через `rangeTotals()` (D-35) |
 | `Controller\AuthController` | `POST /api/admin/auth/login` (порядок: конфігурація → 400 → 422 → 429 → 401/200) і `GET /api/admin/auth/me`; токен не перевіряє — це робить guard (BE-004) |
 | `Controller\PhraseController` | `GET /api/admin/phrases` і `GET /api/admin/phrases/{id}` (BE-005): `parseFilter()` суворо розбирає параметри до звернення до БД (D-25), `index`/`show` викликають `PhraseRepository` і віддають `Phrase::toArray()` з `no-store`. `POST /api/admin/phrases` (`create`, `201`), `PUT /api/admin/phrases/{id}` (`update`, `200`), `DELETE /api/admin/phrases/{id}` (`delete`, `204`) (BE-006): порядок перевірок id → тіло → `PhraseValidator` → БД (D-29); формат `id` розбирає спільний `parseId()`. `POST /api/admin/phrases/import` (`import`, `200`, BE-007): тіло → `items` → валідація всіх елементів у пам'яті → один виклик `createMany()` (D-31) |
 | `Controller\StatsController` | `GET /api/admin/stats` (BE-008): без параметрів (зайві query ігноруються), викликає `PhraseRepository::stats()` і віддає `{ total, active, byCategory, missing }` з `no-store`; токен перевіряє guard, кешу немає (D-32) |
@@ -77,12 +80,19 @@ backend/
 | `Support\Logger` | Обгортка над `error_log()` |
 | `Support\Iso8601` | `DATETIME` з БД (UTC) і Unix-час → ISO 8601 з `Z` |
 | `Support\IdList` | Розбір списку ID з query (`exclude`): сміття пропускається, повтори прибираються, максимум 200 ID; ніколи не кидає винятків (D-18) |
+| `Support\RigaClock` | «День» статистики — дата за `Europe/Riga` (рахує PHP, D-33): `now()`, `today()`, `dayOf()`, `isDay()` (сувора перевірка `YYYY-MM-DD`); джерело часу підміняється замиканням у тестах |
 | `Domain\Categories` | Єдиний список категорій і сувора перевірка коду |
 | `Domain\Languages` | Коди мов і білий список для імені колонки `text_*` |
+| `Domain\StatMetrics` | Білий список метрик `daily_stats` (`visit`, `scan`, `message_lv`, `message_en`, `message_ru`); `message($lang)` |
+| `Domain\ReportPeriod` | Період звіту (`from`, `to`, `dayCount ≤ 366`) і `days()`; календарна арифметика над UTC-датами, перевірка дати — `RigaClock::isDay()`; чисті дані (BE-013) |
+| `Domain\InvalidPeriodException` | Помилка періоду: лише її контролер перетворює на `400` (загальний `InvalidArgumentException` — баг, `500`) |
+| `Domain\VisitReport` | `build(dates, rows)` → `{total, days}`: усі дні з нулями, `byLang` завжди `lv, en, ru`, `total` — сума днів, `int`; чиста збірка без БД |
 | `Domain\Phrase` | Незмінна фраза API: `fromRow()` (рядок БД → `int`, `bool`, ISO 8601, `text` з ключами `lv`, `en`, `ru`) і `toArray()` у порядку `API.md`; єдине відображення для BE-005 … BE-007 (D-26) |
 | `Domain\PhraseFilter` | Параметри списку фраз (`category`, `search`, `missing`, `isActive`, `page`, `perPage`) і `offset()`; чисті дані |
 | `Domain\PhraseInput` | Нормалізовані дані для запису фрази (`category`, `text` trimmed, `isActive`); чисті дані (BE-006) |
 | `Domain\PhraseValidator` | `validate(array)` → `PhraseInput` або **всі** помилки полів (`required` лише для `category` і `text`; `invalid`/`too_long`/`empty`), винятків не кидає; відсутній ключ мови і `null` — порожній переклад (D-30); `trim()` — юнікодний trim як у JS. Використовують `POST`/`PUT` і (BE-007) імпорт (D-27, D-28, D-30) |
+| `Controller\VisitController` | `POST /api/visit` (BE-011): публічний облік відкриттів і сканувань QR, `204`; з запиту береться лише `source` (D-33) |
+| `Repository\DailyStatsRepository` | Лічильники по днях: `increment()`/`incrementMany()` — атомарний `INSERT … ON DUPLICATE KEY UPDATE`, `rangeTotals()` — читання за період. Спільний для BE-011, BE-012, BE-013 |
 | `Database\Migrator` | Застосовує міграції по одному оператору, веде таблицю `migrations` |
 | `Database\SqlSplitter` | Розбиває SQL-файл на оператори (D-15) |
 | `Database\SchemaBuilder` | Збирає `schema.sql` з міграцій (D-16) |
@@ -94,12 +104,12 @@ backend/
 
 ```
 Controller ──► Repository, Auth, Http, Support, Domain
-Repository ──► Domain, Support, PDO  (нічого з Http; з Domain — Phrase, PhraseFilter, PhraseInput, Languages)
+Repository ──► Domain, Support, PDO  (нічого з Http; з Domain — Phrase, PhraseFilter, PhraseInput, Languages, StatMetrics; з Support — RigaClock)
 Http       ──► Auth, Support
 Auth       ──► Support, PDO  (нічого з Http / Controller)
 Database   ──► Support, Domain, PDO
 Support    ──► (нічого з Http / Controller / Repository / Database / Domain)
-Domain     ──► Support\Iso8601 (лише Phrase); Categories, Languages, PhraseFilter, PhraseInput, PhraseValidator — тільки одне від одного, не від Http/Repository
+Domain     ──► Support\Iso8601 (лише Phrase), Support\RigaClock (лише ReportPeriod, для isDay()); Categories, Languages, PhraseFilter, PhraseInput, PhraseValidator — тільки одне від одного, не від Http/Repository
 ```
 
 `Support` не знає про HTTP: його можна використовувати з будь-якого місця (у т. ч. зі скриптів `bin/`) без запуску веб-шару. `Repository` не знає про HTTP і сам не відкриває з'єднання: `PDO` передає контролер (`Db::pdo()`), тож репозиторій можна запускати і з тестів, і зі скриптів. `Database` не залежить від `Http` і `Controller`, а `Domain` — константи, чисті функції й незмінні об'єкти без залежностей від інших шарів (єдиний виняток — `Phrase` користується `Support\Iso8601`; `Support` про `Domain` не знає, тож циклу немає).

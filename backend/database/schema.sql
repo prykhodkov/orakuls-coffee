@@ -35,6 +35,15 @@ CREATE TABLE IF NOT EXISTS `login_attempts` (
   KEY `idx_login_attempts_ip_time` (`ip`, `attempted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- ---- 003_create_daily_stats.sql ----
+CREATE TABLE IF NOT EXISTS `daily_stats` (
+  `day` DATE NOT NULL,
+  `metric` VARCHAR(16) NOT NULL,
+  `count` INT UNSIGNED NOT NULL DEFAULT 0,
+  PRIMARY KEY (`day`, `metric`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 INSERT IGNORE INTO `migrations` (`name`, `applied_at`) VALUES
   ('001_create_phrases.sql', UTC_TIMESTAMP()),
-  ('002_create_login_attempts.sql', UTC_TIMESTAMP());
+  ('002_create_login_attempts.sql', UTC_TIMESTAMP()),
+  ('003_create_daily_stats.sql', UTC_TIMESTAMP());

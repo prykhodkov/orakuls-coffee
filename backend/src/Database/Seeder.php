@@ -6,6 +6,8 @@ namespace App\Database;
 
 use App\Domain\Categories;
 use App\Domain\Languages;
+use App\Domain\StatMetrics;
+use App\Support\RigaClock;
 use PDO;
 use RuntimeException;
 
@@ -116,5 +118,80 @@ final class Seeder
         }
 
         return $map;
+    }
+
+    /**
+     * Історія лічильників для тестів звіту (BE-013) без звернення до БД: валідація використовується і юніт-перевірками.
+     * Кожен день — реальна дата без повторів, ключі лише `day` і метрики StatMetrics, значення — цілі > 0
+     * (рядок count = 0 API створити не може), scan ≤ visit.
+     *
+     * @return list<array{day: string, metric: string, count: int}> у порядку day, metric
+     */
+    public static function loadStats(string $file): array
+    {
+        $raw = require $file;
+        if (!is_array($raw)) {
+            throw new RuntimeException('Stats seed file must return an array');
+        }
+
+        $rows = [];
+        $days = [];
+        foreach ($raw as $index => $entry) {
+            $day = is_array($entry) ? ($entry['day'] ?? null) : null;
+            if (!is_string($day) || !RigaClock::isDay($day)) {
+                throw new RuntimeException("Stats seed row #{$index} has no valid day");
+            }
+            if (isset($days[$day])) {
+                throw new RuntimeException("Duplicate stats seed day: {$day}");
+            }
+            $days[$day] = true;
+
+            $counts = [];
+            foreach ($entry as $key => $value) {
+                if ($key === 'day') {
+                    continue;
+                }
+                if (!is_string($key) || !StatMetrics::isValid($key)) {
+                    throw new RuntimeException("Stats seed {$day}: unknown metric");
+                }
+                if (!is_int($value) || $value <= 0) {
+                    throw new RuntimeException("Stats seed {$day}: {$key} must be a positive integer");
+                }
+                $counts[$key] = $value;
+            }
+            if (($counts[StatMetrics::SCAN] ?? 0) > ($counts[StatMetrics::VISIT] ?? 0)) {
+                throw new RuntimeException("Stats seed {$day}: scan must not exceed visit");
+            }
+
+            foreach (StatMetrics::CODES as $metric) {
+                if (isset($counts[$metric])) {
+                    $rows[] = ['day' => $day, 'metric' => $metric, 'count' => $counts[$metric]];
+                }
+            }
+        }
+
+        usort($rows, static fn (array $a, array $b): int => [$a['day'], $a['metric']] <=> [$b['day'], $b['metric']]);
+
+        return $rows;
+    }
+
+    /**
+     * Заливає історію в daily_stats (спершу очищає таблицю). Не входить у run()/reseed(): історію вантажить лише тест звіту,
+     * інакше тести BE-011/BE-012 бачили б чужі рядки. Повертає кількість рядків.
+     */
+    public function runStats(string $file): int
+    {
+        // Першою дією, до будь-яких змін
+        DatabaseGuard::assertTestDatabase($this->pdo);
+
+        $rows = self::loadStats($file);
+
+        $this->pdo->exec('TRUNCATE TABLE `daily_stats`');
+        $insert = $this->pdo->prepare('INSERT INTO `daily_stats` (`day`, `metric`, `count`) VALUES (?, ?, ?)');
+        foreach ($rows as $row) {
+            $insert->execute([$row['day'], $row['metric'], $row['count']]);
+        }
+
+        return count($rows);
     }
 }

@@ -22,13 +22,13 @@ function phraseColumns(PDO $pdo): array
     return array_column($rows, null, 'COLUMN_NAME');
 }
 
-test('міграції створили login_attempts, migrations і phrases; у migrations записані всі файли міграцій', function () {
+test('міграції створили daily_stats, login_attempts, migrations і phrases; у migrations записані всі файли міграцій', function () {
     $pdo = testPdo();
     $tables = $pdo->query(
         "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"
     )->fetchAll(PDO::FETCH_COLUMN);
 
-    assertSame(['login_attempts', 'migrations', 'phrases'], $tables);
+    assertSame(['daily_stats', 'login_attempts', 'migrations', 'phrases'], $tables);
     assertSame(
         App\Database\Migrator::files(APP_ROOT . '/database/migrations'),
         $pdo->query('SELECT name FROM migrations ORDER BY name')->fetchAll(PDO::FETCH_COLUMN)
@@ -87,6 +87,57 @@ test('login_attempts: типи, NOT NULL, attempted_at без DEFAULT, інде�
     )->fetch();
     assertSame('InnoDB', $table['ENGINE']);
     assertSame('utf8mb4_unicode_ci', $table['TABLE_COLLATION']);
+});
+
+test('daily_stats: типи, NOT NULL, count DEFAULT 0, PK (day, metric), без інших індексів, InnoDB, utf8mb4_unicode_ci', function () {
+    $pdo = testPdo();
+    $columns = array_column($pdo->query(
+        'SELECT COLUMN_NAME, COLUMN_TYPE, COLLATION_NAME, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS'
+        . " WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'daily_stats' ORDER BY ORDINAL_POSITION"
+    )->fetchAll(), null, 'COLUMN_NAME');
+
+    assertSame(['day', 'metric', 'count'], array_keys($columns), 'набір колонок');
+    assertSame('date', $columns['day']['COLUMN_TYPE']);
+    assertSame('varchar(16)', $columns['metric']['COLUMN_TYPE']);
+    assertSame('utf8mb4_unicode_ci', $columns['metric']['COLLATION_NAME']);
+    assertSame('int(10) unsigned', $columns['count']['COLUMN_TYPE']);
+    foreach ($columns as $name => $column) {
+        assertSame('NO', $column['IS_NULLABLE'], "{$name}: NOT NULL");
+    }
+    assertSame('0', $columns['count']['COLUMN_DEFAULT']);
+    assertSame(null, $columns['day']['COLUMN_DEFAULT'], 'day: DEFAULT має бути відсутній');
+    assertSame(null, $columns['metric']['COLUMN_DEFAULT'], 'metric: DEFAULT має бути відсутній');
+
+    $indexes = $pdo->query(
+        'SELECT INDEX_NAME, COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE()'
+        . " AND TABLE_NAME = 'daily_stats' ORDER BY INDEX_NAME, SEQ_IN_INDEX"
+    )->fetchAll();
+    assertSame([['INDEX_NAME' => 'PRIMARY', 'COLUMN_NAME' => 'day'], ['INDEX_NAME' => 'PRIMARY', 'COLUMN_NAME' => 'metric']], $indexes, 'лише PK (day, metric)');
+
+    $table = $pdo->query(
+        "SELECT ENGINE, TABLE_COLLATION FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'daily_stats'"
+    )->fetch();
+    assertSame('InnoDB', $table['ENGINE']);
+    assertSame('utf8mb4_unicode_ci', $table['TABLE_COLLATION']);
+});
+
+test('міграція 003 застосовується поверх БД із 001+002 і ідемпотентна', function () {
+    $pdo = testPdo();
+    $file = '003_create_daily_stats.sql';
+
+    $pdo->exec('DROP TABLE `daily_stats`');
+    $pdo->prepare('DELETE FROM migrations WHERE name = ?')->execute([$file]);
+    try {
+        assertSame([$file], testMigrator()->up(), 'застосовано лише 003');
+        assertSame(0, (int) $pdo->query('SELECT COUNT(*) FROM daily_stats')->fetchColumn(), 'таблиця порожня');
+        assertSame([], testMigrator()->up(), 'повторний up()');
+
+        // Сам SQL виконується двічі без помилки (IF NOT EXISTS)
+        $pdo->exec((string) file_get_contents(APP_ROOT . '/database/migrations/' . $file));
+        assertSame(1, (int) $pdo->query("SELECT COUNT(*) FROM migrations WHERE name = '{$file}'")->fetchColumn(), 'один запис у migrations');
+    } finally {
+        reseed(); // стан як до тесту: таблиця є й порожня
+    }
 });
 
 test('phrases: InnoDB, utf8mb4_unicode_ci у таблиці й усіх текстових колонках', function () {
