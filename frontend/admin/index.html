@@ -43,10 +43,62 @@
                 <img src="/images/eye.webp" width="849" height="342" alt="">
                 <span>Orākuls Coffee <small>Админка</small></span>
             </div>
+            <nav class="tabs" aria-label="Разделы">
+                <a class="tabs__item" href="#phrases" data-tab="phrases">Фразы</a>
+                <a class="tabs__item" href="#visits" data-tab="visits">Статистика</a>
+            </nav>
             <button class="button button--ghost-light" type="button" data-logout>Выйти</button>
         </header>
 
-        <main class="container">
+        <!-- Статистика відвідувань (F-005) -->
+        <main class="container" data-view="visits" hidden>
+            <section class="panel visits">
+                <div class="visits__toolbar">
+                    <div class="segmented" data-presets role="group" aria-label="Период">
+                        <button class="segmented__item" type="button" data-preset="today">Сегодня</button>
+                        <button class="segmented__item" type="button" data-preset="yesterday">Вчера</button>
+                        <button class="segmented__item" type="button" data-preset="7">7 дней</button>
+                        <button class="segmented__item" type="button" data-preset="30">30 дней</button>
+                        <button class="segmented__item" type="button" data-preset="month">Этот месяц</button>
+                        <button class="segmented__item" type="button" data-preset="prev-month">Прошлый месяц</button>
+                    </div>
+                    <form class="visits__range" data-range-form novalidate>
+                        <label class="field field--inline">
+                            <span class="field__label">С</span>
+                            <input class="input" type="date" name="from" required>
+                        </label>
+                        <label class="field field--inline">
+                            <span class="field__label">По</span>
+                            <input class="input" type="date" name="to" required>
+                        </label>
+                        <button class="button button--secondary" type="submit">Показать</button>
+                    </form>
+                </div>
+                <p class="form-error" data-range-error role="alert" hidden></p>
+
+                <h2 class="visits__title" data-visits-title></h2>
+                <div class="stats" data-visits-tiles></div>
+
+                <div class="visits__block">
+                    <h3 class="subheading">Открытия сайта по дням</h3>
+                    <div class="chart" data-visits-chart></div>
+                </div>
+
+                <details class="visits__block" open>
+                    <summary class="subheading">Таблица по дням</summary>
+                    <div class="table-scroll" data-visits-table></div>
+                </details>
+
+                <ul class="hint-list visits__hints">
+                    <li><b>Сканирования QR</b> — открытия сайта с QR-кода на стаканчике.</li>
+                    <li><b>Открытия сайта</b> — все открытия: QR, ссылка, которой поделились, или адрес, набранный вручную.</li>
+                    <li><b>Послания</b> — сколько посланий выдано. Повторное сканирование в течение 20 минут показывает то же послание и новым не считается.</li>
+                    <li>Дни считаются по времени Риги. Личные данные посетителей не сохраняются — только количество.</li>
+                </ul>
+            </section>
+        </main>
+
+        <main class="container" data-view="phrases">
             <section class="stats" data-stats aria-label="Сводка"></section>
 
             <section class="panel">

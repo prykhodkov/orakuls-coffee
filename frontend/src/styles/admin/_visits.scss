@@ -1,0 +1,325 @@
+@use 'sass:color';
+@use '../abstracts/variables' as *;
+@use 'tokens' as *;
+
+// ---- Вкладки в шапці ----
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.tabs__item {
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: $color-cream;
+  font-size: 15px;
+  text-decoration: none;
+  opacity: 0.75;
+  transition: background 0.15s, opacity 0.15s;
+
+  &:hover {
+    opacity: 1;
+  }
+
+  &[aria-current='page'] {
+    background: rgba($color-gold, 0.18);
+    color: $color-gold;
+    opacity: 1;
+  }
+
+  &:focus-visible {
+    outline: 2px solid $color-gold;
+    outline-offset: 2px;
+  }
+}
+
+// ---- Статистика ----
+
+.visits {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  transition: opacity 0.15s;
+}
+
+.is-loading .visits {
+  opacity: 0.6;
+}
+
+.visits__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.visits__range {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.visits__title {
+  font-family: $font-primary;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.visits__block .subheading {
+  margin-top: 0;
+}
+
+details.visits__block > summary {
+  cursor: pointer;
+}
+
+.visits__hints {
+  margin: 0;
+}
+
+// Перемикач періодів
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid $border;
+  border-radius: 10px;
+  background: $bg;
+}
+
+.segmented__item {
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: $text-muted;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+
+  &:hover {
+    color: $text;
+  }
+
+  &.is-active {
+    background: $surface;
+    color: $text;
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(#000, 0.12);
+  }
+
+  &:focus-visible {
+    outline: 2px solid $accent;
+    outline-offset: 1px;
+  }
+}
+
+// Плитка мов без кліку (у зведенні фраз ці плитки — кнопки-фільтри)
+.stat__lang--static {
+  cursor: default;
+
+  &:hover {
+    border-color: $border;
+  }
+
+  small {
+    margin-left: 4px;
+    color: $text-muted;
+  }
+}
+
+// ---- Графік по днях ----
+
+.chart__plot {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  grid-template-rows: 200px auto;
+}
+
+.chart__grid {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 200px;
+  pointer-events: none;
+
+  span {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    transform: translateY(50%);
+    color: $text-muted;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+
+    // Тонка лінія сітки праворуч від підпису
+    &::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 44px;
+      right: 0;
+      border-top: 1px solid rgba($border, 0.7);
+    }
+  }
+}
+
+.chart__bars {
+  position: relative;
+  grid-column: 2;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 200px;
+  border-bottom: 1px solid $border;
+}
+
+.chart__bar {
+  position: relative;
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  // Зона наведення — на всю висоту, а не лише на стовпчик
+  height: 100%;
+  cursor: default;
+  outline: none;
+}
+
+.chart__fill {
+  width: 100%;
+  max-width: 28px;
+  min-height: 1px;
+  margin: 0 auto;
+  border-radius: 4px 4px 0 0;
+  background: $accent;
+  transition: background 0.1s;
+}
+
+.chart__bar.is-weekend .chart__fill {
+  background: color.mix($accent, $surface, 70%);
+}
+
+.chart__bar.is-hover .chart__fill,
+.chart__bar:focus-visible .chart__fill {
+  background: $color-primary;
+}
+
+.chart__axis {
+  grid-column: 2;
+  display: flex;
+  gap: 2px;
+  padding-top: 6px;
+  // Підстраховка: довгий підпис не розширює сторінку
+  overflow: hidden;
+
+  span {
+    flex: 1;
+    min-width: 0;
+    overflow: visible;
+    color: $text-muted;
+    font-size: 11px;
+    white-space: nowrap;
+  }
+}
+
+.chart__tooltip {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 170px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: $color-primary;
+  color: $color-cream;
+  font-size: 13px;
+  box-shadow: 0 6px 18px rgba(#000, 0.2);
+  transform: translateX(-50%);
+  pointer-events: none;
+
+  > b {
+    color: $color-gold;
+    font-weight: 600;
+  }
+}
+
+.chart__empty {
+  padding: 32px 0;
+  color: $text-muted;
+  text-align: center;
+}
+
+// ---- Таблиця ----
+
+.table-scroll {
+  max-height: 480px;
+  overflow: auto;
+  border: 1px solid $border;
+  border-radius: $radius;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+
+  th,
+  td {
+    padding: 8px 12px;
+    border-bottom: 1px solid $border;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  thead th {
+    position: sticky;
+    top: 0;
+    background: $bg;
+    color: $text-muted;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  tbody tr.is-weekend {
+    background: rgba($bg, 0.6);
+  }
+
+  tfoot td {
+    position: sticky;
+    bottom: 0;
+    background: $bg;
+    font-weight: 600;
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    flex-wrap: wrap;
+  }
+
+  .tabs {
+    order: 3;
+    width: 100%;
+  }
+
+  .chart__plot {
+    grid-template-columns: 36px 1fr;
+  }
+
+  .chart__grid span::after {
+    left: 36px;
+  }
+}

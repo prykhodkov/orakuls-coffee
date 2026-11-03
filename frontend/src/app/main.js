@@ -89,5 +89,20 @@ document.querySelectorAll('[data-action="reveal"]').forEach((button) => {
 });
 document.querySelector('[data-action="share"]').addEventListener('click', share);
 
+// Лічильник відкриттів (F-005). QR на стаканчиках веде на адресу з ?qr — так відрізняємо сканування
+// від переходів за посиланням, яким поділились. Параметр прибираємо з адреси, щоб він не потрапив у закладки.
+function trackVisit() {
+  const params = new URLSearchParams(location.search);
+  const source = params.has('qr') ? 'qr' : 'direct';
+  if (source === 'qr') {
+    params.delete('qr');
+    const query = params.toString();
+    history.replaceState(null, '', location.pathname + (query ? `?${query}` : '') + location.hash);
+  }
+  // Статистика не має заважати посланню: помилки ігноруємо
+  api.trackVisit({ source }).catch(() => {});
+}
+
+trackVisit();
 startSky(document.querySelector('.sky'));
 show('lang');

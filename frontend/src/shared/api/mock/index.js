@@ -4,7 +4,9 @@ import { CATEGORIES, LANGS } from '../../constants.js';
 import { validatePhrase } from '../../validation.js';
 import { ApiError } from '../http.js';
 import { getToken } from '../token.js';
+import { daysBetween, eachDay, isIsoDate, MAX_PERIOD_DAYS } from '../../dates.js';
 import { load, save } from './store.js';
+import { countMessage, countVisit, emptyDay, getDay } from './visits.js';
 
 const MOCK_LOGIN = 'admin';
 const MOCK_PASSWORD = 'admin';
@@ -42,7 +44,14 @@ export async function getMessage({ lang, exclude = [] }) {
   if (!pool.length) throw new ApiError(404, { code: 'not_found', message: 'No phrases' });
 
   const phrase = pool[Math.floor(Math.random() * pool.length)];
+  countMessage(lang);
   return { id: phrase.id, lang, text: phrase.text[lang] };
+}
+
+export async function trackVisit({ source }) {
+  await delay(50);
+  countVisit(source === 'qr' ? 'qr' : 'direct');
+  return null;
 }
 
 // ---- Адмінка ----
@@ -160,4 +169,22 @@ export async function getStats() {
     ),
     missing: Object.fromEntries(LANGS.map((lang) => [lang, phrases.filter((p) => !p.text[lang]).length])),
   };
+}
+
+export async function getVisits({ from, to } = {}) {
+  await delay();
+  requireAuth();
+  if (!isIsoDate(from) || !isIsoDate(to) || from > to || daysBetween(from, to) > MAX_PERIOD_DAYS) {
+    throw new ApiError(400, { code: 'bad_request', message: 'Invalid period' });
+  }
+
+  const days = eachDay(from, to).map((date) => ({ date, ...structuredClone(getDay(date)) }));
+  const total = emptyDay();
+  for (const day of days) {
+    total.visits += day.visits;
+    total.scans += day.scans;
+    total.messages += day.messages;
+    for (const lang of LANGS) total.byLang[lang] += day.byLang[lang];
+  }
+  return { from, to, timezone: 'Europe/Riga', total, days };
 }

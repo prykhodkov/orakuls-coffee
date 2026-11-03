@@ -11,7 +11,8 @@ export class ApiError extends Error {
   }
 }
 
-export async function request(path, { method = 'GET', query, body, auth = false } = {}) {
+// keepalive — запит не обривається, якщо користувач одразу закрив сторінку
+export async function request(path, { method = 'GET', query, body, auth = false, keepalive = false } = {}) {
   const url = new URL(BASE_URL + path, location.origin);
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value);
@@ -30,6 +31,7 @@ export async function request(path, { method = 'GET', query, body, auth = false 
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      keepalive,
     });
   } catch {
     throw new ApiError(0, { code: 'network_error', message: 'Network error' });

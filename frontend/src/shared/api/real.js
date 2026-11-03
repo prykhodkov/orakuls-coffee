@@ -6,6 +6,10 @@ import { request } from './http.js';
 export const getMessage = ({ lang, exclude = [] }) =>
   request('/message', { query: { lang, exclude: exclude.join(',') } });
 
+// Лічильник відкриттів сайту (F-005). source: 'qr' — відкрито з QR на стаканчику, 'direct' — інакше
+export const trackVisit = ({ source }) =>
+  request('/visit', { method: 'POST', body: { source }, keepalive: true });
+
 // ---- Адмінка ----
 
 export const login = ({ login, password }) =>
@@ -31,3 +35,6 @@ export const importPhrases = (items) =>
   request('/admin/phrases/import', { method: 'POST', body: { items }, auth: true });
 
 export const getStats = () => request('/admin/stats', { auth: true });
+
+// Статистика відвідувань по днях за період (F-005); from, to — YYYY-MM-DD за часом Риги
+export const getVisits = ({ from, to }) => request('/admin/visits', { query: { from, to }, auth: true });
