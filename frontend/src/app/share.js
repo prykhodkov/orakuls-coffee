@@ -8,11 +8,16 @@ const QUOTES = {
   ru: ['«', '»'],
 };
 
-// Адреса сайту: VITE_SITE_URL, інакше поточний origin. У демо з диска (file://) origin — "null",
-// тоді посилання не додаємо
+// Адреса сайту: VITE_SITE_URL, інакше поточний origin. Беремо лише origin (без шляху, ?qr і #),
+// щоб перехід за поширеним посиланням не рахувався як сканування QR (див. docs/FRONTEND.md → «QR-код»).
+// У демо з диска (file://) origin — "null", тоді посилання не додаємо.
 function siteUrl() {
-  const url = (import.meta.env.VITE_SITE_URL || location.origin).replace(/\/$/, '');
-  return /^https?:\/\//.test(url) ? url : '';
+  try {
+    const { origin, protocol } = new URL(import.meta.env.VITE_SITE_URL || location.origin);
+    return protocol === 'https:' || protocol === 'http:' ? origin : '';
+  } catch {
+    return '';
+  }
 }
 
 export function buildShareText(text, lang) {
