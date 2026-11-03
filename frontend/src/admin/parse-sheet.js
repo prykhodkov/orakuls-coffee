@@ -77,33 +77,73 @@ async function readWorkbook(file) {
   return { rows, firstRow };
 }
 
-// Повертає { rows: [{ rowNumber, item, fields }] }, де rowNumber — номер рядка як в Excel,
-// fields — помилки валідації (null, якщо рядок валідний)
+function findColumns(row) {
+  const header = row.map(normalize);
+  return Object.fromEntries(
+    Object.entries(COLUMN_ALIASES).map(([key, aliases]) => [
+      key,
+      header.findIndex((cell) => aliases.some((alias) => normalize(alias) === cell)),
+    ]),
+  );
+}
+
+const isBlank = (row) => !row.some((value) => String(value).trim());
+
+// Підтримуються два формати:
+// 1) таблиця зі стовпцем category: «category | lv | en | ru»;
+// 2) розділи без стовпця category (так прийшов файл від клієнта): рядок-назва
+//    «❤️ ЛЮБОВЬ — 100», під ним заголовки «№ | Русский | Latviešu | English» і фрази;
+//    категорія береться з назви розділу, повторні рядки заголовків пропускаються.
+// Повертає { rows: [{ rowNumber, item, fields }], missingColumns }, де rowNumber — номер рядка
+// як в Excel, fields — помилки валідації (null, якщо рядок валідний)
 export async function parseSheetFile(file) {
   const { rows, firstRow } = await readWorkbook(file);
+  if (rows.every(isBlank)) throw new SheetError('Файл пустой.');
 
-  const headerIndex = rows.findIndex((row) => row.some((cell) => String(cell).trim()));
-  if (headerIndex === -1) throw new SheetError('Файл пустой.');
-
-  const header = rows[headerIndex].map(normalize);
-  const columns = {};
-  for (const [key, aliases] of Object.entries(COLUMN_ALIASES)) {
-    columns[key] = header.findIndex((cell) => aliases.some((alias) => normalize(alias) === cell));
-  }
-  const missingColumns = Object.keys(columns).filter((key) => columns[key] === -1);
-  if (missingColumns.includes('category') || missingColumns.length === LANGS.length) {
+  // Рядок заголовків — перший, де знайдено хоча б один стовпець мови
+  const langCount = (row) => LANGS.filter((lang) => findColumns(row)[lang] !== -1).length;
+  const headerIndex = rows.findIndex((row) => langCount(row) > 0);
+  if (headerIndex === -1) {
     throw new SheetError(
-      `В первой строке не найдены заголовки: ${missingColumns.join(', ')}. Нужны столбцы category, lv, en, ru.`,
+      'Не найдена строка с заголовками столбцов. Нужны столбцы lv, en, ru (или Latviešu, English, Русский) и category — либо столбцом, либо названиями разделов.',
     );
   }
 
+  const columns = findColumns(rows[headerIndex]);
+  const headerKey = rows[headerIndex].map(normalize).join('|');
+  const missingColumns = LANGS.filter((lang) => columns[lang] === -1);
+  const hasCategoryColumn = columns.category !== -1;
+
   const cell = (row, key) => (columns[key] === -1 ? '' : String(row[columns[key]] ?? ''));
+  const langCellsEmpty = (row) => LANGS.every((lang) => !cell(row, lang).trim());
+  const filledCells = (row) => row.filter((value) => String(value).trim());
+
+  // Назва розділу: єдина заповнена клітинка в рядку, переклади порожні
+  const sectionTitle = (row) => {
+    if (hasCategoryColumn || !langCellsEmpty(row)) return null;
+    const filled = filledCells(row);
+    return filled.length === 1 ? String(filled[0]) : null;
+  };
+
+  // Назва розділу може стояти й над першим рядком заголовків
+  let section = '';
+  for (const row of rows.slice(0, headerIndex)) {
+    const title = sectionTitle(row);
+    if (title !== null) section = resolveCategory(title);
+  }
 
   const result = [];
   rows.slice(headerIndex + 1).forEach((row, i) => {
-    if (!row.some((value) => String(value).trim())) return;
+    if (isBlank(row)) return;
+    if (row.map(normalize).join('|') === headerKey) return;
+    const title = sectionTitle(row);
+    if (title !== null) {
+      section = resolveCategory(title);
+      return;
+    }
+
     const input = {
-      category: resolveCategory(cell(row, 'category')),
+      category: hasCategoryColumn ? resolveCategory(cell(row, 'category')) : section,
       text: Object.fromEntries(LANGS.map((lang) => [lang, cell(row, lang)])),
     };
     const { value, fields } = validatePhrase(input);
