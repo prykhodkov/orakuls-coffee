@@ -22,3 +22,6 @@ Thumbs.db
 # Кеші й логи
 .vite
 *.log
+
+# Збірка пакета для хостингу (bin/build-release.php)
+backend/build/

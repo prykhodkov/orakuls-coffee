@@ -1,0 +1,40 @@
+# Корінь сайту на хостингу (public_html), BE-009. Apache 2.4 + mod_rewrite (GoDaddy cPanel).
+# Статика фронта лежить у корені, адмінка — в /admin/, API — /api/* (PHP). Один домен, CORS не потрібен.
+# Перевірка правил: docker compose -f docker-compose.yml -f docker-compose.hosting.yml up -d --build apache
+#                   і php tests/hosting-check.php http://localhost:8080 --local  (див. docs/deployment.md)
+
+Options -Indexes
+DirectoryIndex index.html
+
+# ---- Заборона службових файлів: dotfiles (.env, .git, .htaccess …) і службові розширення ----
+<FilesMatch "^\.">
+    Require all denied
+</FilesMatch>
+<FilesMatch "\.(env|sql|md|log|example|dist|bak|ini)$">
+    Require all denied
+</FilesMatch>
+# Каталог .git, якщо його випадково розгорнули в public_html (директивою на рівні файлів вище він не закривається)
+RedirectMatch 404 "/\.git(/|$)"
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # ---- Заголовок Authorization має дійти до PHP: без цього всі адмін-запити дають 401 ----
+    # (mod_rewrite кладе його в HTTP_AUTHORIZATION; Request::collectHeaders() читає і його, і REDIRECT_-варіант)
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # ---- www → без www, HTTP → HTTPS однією переадресацією (query string, зокрема ?qr, зберігається автоматично) ----
+    # Адреса в QR — остаточна: https://<домен>/?qr без редиректів; ці правила — лише страховка для інших варіантів входу.
+    RewriteCond %{HTTP_HOST} ^www\.(.+)$ [NC]
+    RewriteRule ^ https://%1%{REQUEST_URI} [L,R=301,NE]
+
+    # Умова X-Forwarded-Proto — на випадок, якщо перед сайтом стоїть проксі, що завершує TLS (інакше був би цикл переадресацій)
+    RewriteCond %{HTTPS} !=on
+    RewriteCond %{HTTP:X-Forwarded-Proto} !=https [NC]
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301,NE]
+
+    # ---- /api/* → api/index.php; реальні файли й папки (статика) правилами нижче не чіпаються ----
+    # Шляхи в маршрутах PHP — з префіксом /api, а REQUEST_URI лишається оригінальним (/api/message)
+    RewriteRule ^api/index\.php$ - [L]
+    RewriteRule ^api(/.*)?$ api/index.php [L,QSA]
+</IfModule>

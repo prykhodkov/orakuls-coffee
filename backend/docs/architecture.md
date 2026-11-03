@@ -36,15 +36,18 @@ backend/
     Support/                Config, Db, Json, Logger, ApiException, Iso8601, IdList, RigaClock
     Domain/                 Categories, Languages, StatMetrics — єдині списки кодів; ReportPeriod, InvalidPeriodException, VisitReport — період і збірка звіту зі статистики; Phrase, PhraseFilter — фраза API і параметри списку; PhraseInput, PhraseValidator — дані й валідація запису фрази (без залежностей від Http/Repository)
     Database/               Migrator, SqlSplitter, SchemaBuilder, Seeder, DatabaseGuard
-  bin/                      CLI-скрипти: migrate.php, seed.php, build-schema.php, hash-password.php
+  bin/                      CLI-скрипти: migrate.php, seed.php, build-schema.php, hash-password.php,
+                            generate-admin-credentials.php, build-release.php (пакет для хостингу)
   database/
     migrations/             NNN_*.sql — міграції
     schema.sql              повна схема для ручного імпорту (генерується)
     seed/phrases.php        дані сіду (лише для тестової БД)
     seed/daily_stats.php    історія лічильників для тестів звіту (вантажиться на вимогу, не в reseed())
+  deploy/                   для хостингу (BE-009): public_html/ (.htaccess, api/index.php, api/.user.ini),
+                            diagnostics/diag.php (тимчасова діагностика), apache-test/ (локальна імітація хостингу)
   docker/mysql-init/        створення БД orakuls_test при першому запуску MySQL
   tests/                    run.php (юніт-перевірки), api.php + api/*.php (тестова БД),
-                            smoke.php (по HTTP), lib.php, db-lib.php, auth-lib.php (спільні хелпери),
+                            smoke.php (по HTTP), hosting-check.php (розгортання по HTTP), lib.php, db-lib.php, auth-lib.php (спільні хелпери),
                             workers/ (допоміжні CLI-процеси для паралельних перевірок, не тести)
   Dockerfile, docker-compose.yml, .env.example
 ```

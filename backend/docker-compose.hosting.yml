@@ -1,0 +1,26 @@
+# Локальна імітація хостингу (BE-009): Apache + .htaccess + пакет із build/release.
+# Запуск (з backend/):
+#   (у frontend/: npm run build)
+#   docker compose exec php php bin/build-release.php
+#   cp -r ../frontend/dist/. build/release/public_html/        # у контейнері php frontend/ недоступний
+#   docker compose -f docker-compose.yml -f docker-compose.hosting.yml up -d --build apache
+#   docker compose exec php php tests/hosting-check.php http://apache --local        # з контейнера php
+# або з хоста: php tests/hosting-check.php http://localhost:8080 --local (якщо є локальний PHP)
+# Працює з тестовою БД orakuls_test (див. deploy/apache-test/test.env), робочу БД не чіпає.
+
+services:
+  apache:
+    build:
+      context: .
+      dockerfile: deploy/apache-test/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    # Налаштування — змінними оточення з test.env (Config читає їх раніше за .env); справжнього .env у пакеті, як і на хостингу, немає в git
+    env_file:
+      - deploy/apache-test/test.env
+    volumes:
+      - ./build/release/public_html:/var/www/html:ro
+      - ./build/release/orakuls:/var/www/orakuls:ro
