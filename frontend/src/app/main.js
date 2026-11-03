@@ -1,7 +1,8 @@
 import '../styles/app.scss';
 import { api } from '../shared/api/index.js';
 import { getRecent, getSeen, rememberSeen, saveRecent } from './history.js';
-import { applyTranslations } from './i18n.js';
+import { applyTranslations, STRINGS } from './i18n.js';
+import { shareMessage } from './share.js';
 import { startSky } from './sky.js';
 
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -11,9 +12,15 @@ const REVEAL_MIN_MS = reducedMotion ? 600 : 2600;
 const screens = document.querySelectorAll('[data-screen]');
 const messageText = document.querySelector('[data-message-text]');
 const errorText = document.querySelector('[data-error]');
+const shareLabel = document.querySelector('[data-share-label]');
+
+// Скільки показувати «Скопировано» на кнопці
+const COPIED_MS = 2000;
 
 let lang = null;
 let busy = false;
+let currentText = '';
+let copiedTimer = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -50,6 +57,7 @@ async function revealMessage() {
       rememberSeen(message.id);
       saveRecent(message);
     }
+    currentText = message.text;
     messageText.textContent = message.text;
     messageText.classList.toggle('message__text--long', message.text.length > 160);
     show('message');
@@ -61,12 +69,25 @@ async function revealMessage() {
   }
 }
 
+async function share() {
+  if (!currentText) return;
+  const result = await shareMessage(currentText, lang);
+  if (result !== 'copied') return;
+  // На комп'ютері тексту в системному меню немає — показуємо, що його скопійовано
+  shareLabel.textContent = STRINGS[lang].copied;
+  clearTimeout(copiedTimer);
+  copiedTimer = setTimeout(() => {
+    shareLabel.textContent = STRINGS[lang].share;
+  }, COPIED_MS);
+}
+
 document.querySelectorAll('[data-lang]').forEach((button) => {
   button.addEventListener('click', () => selectLang(button.dataset.lang));
 });
 document.querySelectorAll('[data-action="reveal"]').forEach((button) => {
   button.addEventListener('click', revealMessage);
 });
+document.querySelector('[data-action="share"]').addEventListener('click', share);
 
 startSky(document.querySelector('.sky'));
 show('lang');

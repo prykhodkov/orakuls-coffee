@@ -2,7 +2,7 @@
 // (один origin), тож зміни в адмінці видно на сайті без перезавантаження.
 import { SEED } from './seed.js';
 
-const KEY = 'orakuls-mock-db-v1';
+const KEY = 'orakuls-mock-db-v2';
 
 // Якщо localStorage недоступний — база живе в пам'яті
 let memoryDb = null;

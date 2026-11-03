@@ -7,6 +7,8 @@ export const STRINGS = {
     revealing: 'Zvaigznes meklē tavu vēstījumu…',
     messageLabel: 'Tavs vēstījums',
     error: 'Neizdevās saņemt vēstījumu. Pamēģini vēlreiz.',
+    share: 'Dalīties',
+    copied: 'Nokopēts',
   },
   en: {
     tagline: 'Coffee with a message',
@@ -15,6 +17,8 @@ export const STRINGS = {
     revealing: 'The stars are finding your message…',
     messageLabel: 'Your message',
     error: 'Couldn’t get your message. Please try again.',
+    share: 'Share',
+    copied: 'Copied',
   },
   ru: {
     tagline: 'Кофе с посланием',
@@ -23,6 +27,8 @@ export const STRINGS = {
     revealing: 'Звёзды ищут твоё послание…',
     messageLabel: 'Твоё послание',
     error: 'Не удалось получить послание. Попробуй ещё раз.',
+    share: 'Поделиться',
+    copied: 'Скопировано',
   },
 };
 
