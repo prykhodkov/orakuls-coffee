@@ -1,6 +1,7 @@
 # Розгортання
 
-> **Статус (2026-11-03): пакет для хостингу підготовлено й перевірено локально, на справжньому хостингу ще не розгорнуто.**
+> **Статус (2026-11-04): розгорнуто на `https://orakulscoffee.com`, перевірки на хостингу зелені** — див. [«Результати перевірки хостингу»](#результати-перевірки-хостингу).
+> Історично (2026-11-03): пакет для хостингу підготовлено й перевірено локально.
 > Усе, що можна було зробити без доступу до cPanel, зроблено: правила `.htaccess`, точка входу, збірка пакета, скрипти перевірки, процедура
 > облікових даних. Що **лишається на хостингу**, зібрано в розділі [«Що лишилось після отримання доступу»](#що-лишилось-після-отримання-доступу-до-хостингу).
 > Задачі: [BE-009](tasks/BE-009-hosting-deploy/task.md) (деплой), [BE-014](tasks/BE-014-qr-preprint-check/task.md) (перевірка QR перед друком).
@@ -12,7 +13,7 @@ GoDaddy Web Hosting (cPanel, Apache, shared).
 | Компонент | Версія | Примітка |
 |-----------|--------|----------|
 | PHP | **8.4** | Доступні 8.2 / 8.3 / 8.4, типова 8.3 — **8.4 треба вибрати вручну** в cPanel («Select PHP Version»). 8.1 і старіші — платний Extended Support |
-| MySQL | **5.7** (5.7.38) | Найновіша для cPanel-хостингу; MySQL 8.0 є лише на Managed WordPress. Запасний варіант — MariaDB 10.6 |
+| СУБД | **MariaDB 10.11.19** (фактично на акаунті, 2026-11-04) | Документація GoDaddy обіцяла MySQL 5.7; код сумісний з обома (без можливостей MySQL 8) |
 
 Версії взято з довідки GoDaddy через пошукову видачу (сторінку напряму прочитати не вдалося). **Перед початком деплою звірити реальні версії в cPanel** (діагностичним скриптом, див. нижче) і виправити цей файл та `docs/BACKEND.md`.
 
@@ -147,6 +148,49 @@ docker compose exec php php tests/hosting-check.php http://apache --local       
 
 Фронт і бекенд — два незалежні кроки: збірка й заливка статики (`public_html/index.html`, `assets/`, `admin/`), окремо — заливка API (`orakuls/`, `public_html/api/`). `frontend/dist/` не лежить у git, тож `git pull` на сервері готового фронта не дасть. Узгодження процесу з фронтом — через `docs/BACK-TO-FRONT.md`.
 
+## Доступ до сервера для наступних змін
+
+Між сесіями доступ на сервері **вимкнено**; у розробника лишається лише локальна папка з ключами. Секретів у репозиторії немає.
+
+**Що де лежить (на компʼютері розробника, поза git):**
+
+| Файл | Що це | Як відновити, якщо втрачено |
+|------|-------|-----------------------------|
+| `%USERPROFILE%.orakuls-secretsid_deploy` + `id_deploy.pub` | SSH-ключ `claude-deploy` (приватний + публічний) | `ssh-keygen -t ed25519 -C claude-deploy -f …id_deploy` і імпортувати новий `.pub` |
+| `%USERPROFILE%.orakuls-secretsknown_hosts` | Відбиток сервера | Створиться сам при першому вході |
+| `%USERPROFILE%.orakuls-secretsdb.env` | Дані БД (те саме, що в серверному `~/orakuls/.env`) | Прочитати з `~/orakuls/.env` на сервері |
+| API-токен cPanel | Потрібен лише для створення БД/користувачів; для оновлення коду не потрібен | Створити новий (нижче) |
+
+**Сервер:** cPanel-користувач `l6xf4w9lfi1i`, хост `sxb1plzcpnl503800.prod.sxb1.secureserver.net` (SSH — порт 22). Вхід у cPanel: GoDaddy → My Products → Web Hosting → Manage → cPanel Admin.
+
+### Увімкнути доступ (на початку сесії змін)
+
+1. **SSH у панелі GoDaddy:** host.godaddy.com → хостинг → Settings → Server → **SSH Access** → увімкнути.
+2. **Ключ:** cPanel → Security → **SSH Access → Manage SSH Keys**. Якщо `claude-deploy` є в «Public Keys» — **Manage → Authorize**. Якщо немає — **Import Key**: Name `claude-deploy`, у «Public Key» вставити вміст `id_deploy.pub`, Import, потім Authorize.
+3. **API-токен (лише якщо треба створювати БД/користувачів):** cPanel → Security → **Manage API Tokens** → Create, назва `claude-deploy`, термін +3 дні; зберегти в файл поза репозиторієм.
+4. Перевірка: `ssh -i %USERPROFILE%.orakuls-secretsid_deploy -o IdentitiesOnly=yes l6xf4w9lfi1i@sxb1plzcpnl503800.prod.sxb1.secureserver.net "php -v"`.
+
+### Оновити сайт
+
+Порядок — розділ [«Деплой і відкат»](#деплой-і-відкат): збірка пакета → локальна перевірка → (нова міграція: `php bin/migrate.php` на сервері) → заливка `orakuls/` (**без** `.env`) і `public_html/` → `hosting-check.php` і `smoke.php` проти прода. По SSH заливка — `tar`:
+
+```
+cd backend/build/release
+tar -cf - orakuls     | ssh <ключ і хост як вище> "tar -xf - -C ~"
+tar -cf - -C public_html . | ssh <…> "tar -xf - -C ~/public_html"
+```
+
+`.env`, `~/.my.cnf`, `~/backups` і crontab при оновленні не чіпаються. Перед заливкою варто зробити свіжий дамп: `mysqldump --single-transaction --no-tablespaces l6xf4w9lfi1i_orakuls | gzip > ~/backups/orakuls-manual-$(date +%F).sql.gz`.
+
+### Вимкнути доступ (наприкінці сесії)
+
+- [ ] cPanel → Manage SSH Keys → `claude-deploy` → **Deauthorize** (ключ лишається в списку, наступного разу — лише Authorize).
+- [ ] cPanel → Manage API Tokens → видалити токен `claude-deploy` (якщо створювався) і файл із ним.
+- [ ] GoDaddy → Settings → Server → **SSH Access** → вимкнути.
+- [ ] На сервері не лишилось тимчасових файлів (`diag.php` тощо) у `~/public_html`.
+
+Cron (обрізання лога, дамп БД) працює без SSH і токена.
+
 ## Перевірка після деплою
 
 ```
@@ -160,16 +204,59 @@ SMOKE_ADMIN_LOGIN=admin SMOKE_ADMIN_PASSWORD='…' docker compose run --rm --no-
 
 Зроблено локально (див. вище) і **ще не підтверджено на хостингу**:
 
-- [ ] Вибрати PHP 8.4, звірити версії PHP/MySQL з документацією (`diag.php`), розширення `pdo_mysql`, `mbstring`, `json`, `openssl`/`sodium`.
-- [ ] Створити БД і користувача, імпортувати `schema.sql`, перевірити таблиці й міграції 001–003.
-- [ ] Залити пакет; боєві облікові дані за процедурою вище; пароль передати клієнту.
-- [ ] `tests/hosting-check.php https://<домен>` — зелений (правила `.htaccess` на справжньому Apache/PHP хостингу: `Authorization`, роутинг `/api`, службові файли, редиректи, довгий `exclude`).
+- [x] Вибрати PHP 8.4, звірити версії PHP/MySQL з документацією (`diag.php`), розширення `pdo_mysql`, `mbstring`, `json`, `openssl`/`sodium`.
+- [x] Створити БД і користувача, імпортувати `schema.sql`, перевірити таблиці й міграції 001–003.
+- [x] Залити пакет; боєві облікові дані за процедурою вище; пароль передати клієнту.
+- [x] `tests/hosting-check.php https://<домен>` — зелений (правила `.htaccess` на справжньому Apache/PHP хостингу: `Authorization`, роутинг `/api`, службові файли, редиректи, довгий `exclude`).
 - [ ] `diag.php` з двох мереж: `REMOTE_ADDR` справжній? Ліміт спроб входу наскрізно (5 → `429`, інша мережа проходить).
-- [ ] Ліміти: `post_max_size` ≥ 8 МБ (чи діє `.user.ini`), `memory_limit`, `max_execution_time`, `max_allowed_packet`; найгірший запит імпорту (≈ 6 МБ) проходить.
-- [ ] `error_log`: куди йде, не публічний, не росте безмежно.
-- [ ] Резервна копія й порядок відкату пройдені хоча б один раз.
+- [x] Ліміти: `post_max_size` ≥ 8 МБ (чи діє `.user.ini`), `memory_limit`, `max_execution_time`, `max_allowed_packet`; найгірший запит імпорту (≈ 6 МБ) проходить.
+- [x] `error_log`: куди йде, не публічний, не росте безмежно (cron, 2026-11-04).
+- [x] Резервна копія: щотижневий `mysqldump` (cron), перша копія перевірена; відновлення описано в «Результатах».
 - [ ] BE-014: контрольний прогін з телефоном і QR на фінальному домені.
 
 ## Результати перевірки хостингу
 
-_(заповнюється після деплою: дата, домен, версії PHP/MySQL, `REMOTE_ADDR` з двох мереж, `error_log`, ліміти, результат `hosting-check`.)_
+**2026-11-04, `https://orakulscoffee.com` — розгорнуто, перевірки зелені.**
+
+| Що | Результат |
+|----|-----------|
+| Акаунт | cPanel `l6xf4w9lfi1i` на `sxb1plzcpnl503800.prod.sxb1.secureserver.net`; `orakulscoffee.com` — основний домен, docroot `~/public_html` |
+| PHP | **8.4.27**, SAPI `litespeed` (не `mod_php`/FastCGI), CLI теж 8.4.27. Версію змінено з типової 8.3 у панелі GoDaddy (Settings → PHP version): у cPanel PHP Selector список версій на рівні акаунта неактивний, а налаштування на домен недоступне (ізоляцію сайтів GoDaddy заборонив) |
+| Розширення | `pdo_mysql`, `mbstring`, `json`, `openssl`, `sodium` — є. На CloudLinux `pdo_mysql` конфліктує з `nd_pdo_mysql`: увімкнено `nd_pdo_mysql` + `nd_mysqli` (mysqlnd), у PHP вони видні як `pdo_mysql` |
+| СУБД | **MariaDB 10.11.19** (`10.11.19-MariaDB-cll-lve`), а не MySQL 5.7. Код сумісний: без можливостей MySQL 8; кодування й суворий `sql_mode` задаються на кожному з'єднанні (`Db.php`), бо типові на сервері — `latin1` і `NO_ENGINE_SUBSTITUTION`; таблиці створено в `utf8mb4` |
+| БД | `l6xf4w9lfi1i_orakuls`, користувач `l6xf4w9lfi1i_orakuls` (ALL PRIVILEGES лише на неї); префікса cPanel не вимагає. Міграції 001–003 застосовано `php bin/migrate.php` по SSH |
+| `tzdata` | 2026.5; `Europe/Riga` 2026-10-25 00:30Z → 03:30 EEST ✔ |
+| `REMOTE_ADDR` | Справжній IP клієнта: з компʼютера 159.224.216.56, з телефона через мобільну мережу 89.209.188.52; заголовків проксі (`X-Forwarded-For`, `X-Real-IP`, `CF-Connecting-IP`, `Forwarded`, `Via`) немає. Ліміт спроб входу за `REMOTE_ADDR` працює коректно |
+| `Authorization` | Доходить до PHP (`HTTP_AUTHORIZATION`), `login` → `me` = 200 |
+| Ліміти | `post_max_size` 32M, `upload_max_filesize` 30M, `memory_limit` 128M, `max_execution_time` 30, `max_allowed_packet` 256M — найгірший імпорт (≈ 6 МБ) влазить. `display_errors` вимкнено |
+| `error_log` | `ini error_log = error_log` (відносний): файл `error_log` створюється в каталозі скрипта (для API — `~/public_html/api/error_log`). По HTTP `/api/error_log` і `/error_log` → **403** (закриває сам хостинг, наше правило `*.log` цей файл не ловить). Розмір обмежує cron (нижче) |
+| `hosting-check.php` | **39 перевірок, 0 провалено** (з `SMOKE_ADMIN_*`), зокрема довгий `exclude` 100/200 ID, редиректи `http→https`, `www→без www` зі збереженням `?qr`, остаточна адреса `https://orakulscoffee.com/?qr` → 200 без редиректів |
+| `smoke.php` | «все гаразд» (без `SMOKE_WRITE`) |
+| Фрази | 600 фраз імпортовано адміном через адмінку (Excel), видача працює |
+| Діагностика | `diag.php` залито з випадковим ключем, знято результати з двох мереж, **видалено** (тепер 404) |
+
+**Як розгорнуто (фактично).** Через SSH (ключ, увімкнений у панелі GoDaddy → SSH access) замість ручного File Manager/phpMyAdmin: `tar` пакета `orakuls/` → `~/orakuls`, `public_html/` → `~/public_html` (заглушку GoDaddy `home.html`, `layout-styles.css` видалено; `cgi-bin/`, `404.shtml` лишились); `.env` (права `600`) зібрано на сервері: `DB_*` + вивід `bin/generate-admin-credentials.php`, запущеного на сервері. БД і користувача створено через cPanel UAPI (`Mysql/create_database`, `create_user`, `set_privileges_on_database`).
+
+**Обслуговування без людини (cron, 2026-11-04).** Проєкт разовий, хостинг ніхто регулярно не доглядає, тож усе, що росте, обмежено автоматично (`crontab -l` на сервері; задачі позначені `# Orakuls (BE-009)`):
+
+| Коли | Що | Навіщо |
+|------|----|--------|
+| Нд 04:00 (час сервера) | Якщо `~/public_html/api/error_log` > 5 МБ — лишити останній 1 МБ | Лог не росте безмежно (хостинг цей файл не ротує) |
+| Нд 04:30 | `mysqldump` БД → `~/backups/orakuls-YYYY-MM-DD.sql.gz`, зберігаються 8 найновіших | Резервна копія фраз і статистики (≈ 43 КБ на копію) |
+
+Облікові дані для `mysqldump` — у `~/.my.cnf` (права `600`, згенеровано з `~/orakuls/.env`); якщо змінюється пароль БД — оновити обидва файли. `~/backups` — поза `public_html`, права `700`. Обидві команди один раз прогнано вручну: дамп цілий (`gzip -t`), 4 таблиці з даними.
+
+**Відновлення БД з копії** (по SSH; SSH вмикається в панелі GoDaddy, ключ — cPanel → SSH Access):
+
+```
+ls -1t ~/backups/                                              # вибрати копію
+zcat ~/backups/orakuls-YYYY-MM-DD.sql.gz | mysql l6xf4w9lfi1i_orakuls   # перезаписує таблиці з дампу
+```
+
+Без SSH: cPanel → File Manager → завантажити `.sql.gz` з `~/backups` → phpMyAdmin → БД → Import. Файли сайту окремо не копіюються: їх відтворює збірка пакета з репозиторію (розділ «Збірка пакета»); `~/orakuls/.env` — єдиний файл, якого немає в git (пароль адміна можна перегенерувати, пароль БД — змінити в cPanel і вписати в `.env` і `~/.my.cnf`).
+
+**Лишилось відкритим:**
+
+- [ ] Ліміт спроб входу наскрізно (5 невдалих → `429` з `Retry-After`, інша мережа проходить) — виконує людина вручну; `REMOTE_ADDR` справжній, тож очікується коректна робота.
+- [ ] BE-014: контрольний прогін з телефоном і QR.
+- [ ] Після деплою: видалити API-токен `claude-deploy` і SSH-ключ `claude-deploy` у cPanel.
