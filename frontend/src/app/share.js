@@ -1,4 +1,4 @@
-// Кнопка «Поділитися»: текст послання + посилання на сайт.
+// Кнопка «Поділитися»: текст послання + підпис, без посилання на сайт.
 // На телефоні — системне меню (Web Share API), де його немає (комп'ютер) — копіювання в буфер.
 
 // Лапки за типографікою кожної мови
@@ -8,23 +8,10 @@ const QUOTES = {
   ru: ['«', '»'],
 };
 
-// Адреса сайту: VITE_SITE_URL, інакше поточний origin. Беремо лише origin (без шляху, ?qr і #),
-// щоб перехід за поширеним посиланням не рахувався як сканування QR (див. docs/FRONTEND.md → «QR-код»).
-// У демо з диска (file://) origin — "null", тоді посилання не додаємо.
-function siteUrl() {
-  try {
-    const { origin, protocol } = new URL(import.meta.env.VITE_SITE_URL || location.origin);
-    return protocol === 'https:' || protocol === 'http:' ? origin : '';
-  } catch {
-    return '';
-  }
-}
-
+// Посилання на сайт навмисно не додаємо (рішення клієнта): послання має йти лише зі стаканчика
 export function buildShareText(text, lang) {
   const [open, close] = QUOTES[lang] ?? QUOTES.en;
-  // Посилання — всередині тексту, а не окремим полем url: частина застосунків
-  // при наявності url відкидає text і надсилає лише посилання
-  return [`${open}${text}${close}`, '— Orākuls Coffee', siteUrl()].filter(Boolean).join('\n');
+  return `${open}${text}${close}\n— Orākuls Coffee`;
 }
 
 // Повертає 'shared' | 'copied' | 'cancelled' | 'failed'
